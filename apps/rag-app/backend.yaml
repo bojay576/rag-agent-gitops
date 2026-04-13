@@ -22,7 +22,7 @@ spec:
         
         env:
         - name: MILVUS_ADDRESS
-          value: "192.168.30.17:30225"
+          value: "milvus.milvus.svc.cluster.local:19530"
         - name: OLLAMA_URL
           value: "http://10.32.118.44:11434"
         - name: OLLAMA_EMBEDDING_MODEL
