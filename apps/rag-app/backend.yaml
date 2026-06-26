@@ -2,7 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: rag-backend
-  namespace: default
+  namespace: rag-app
+  labels:
+    app: rag-backend
+    component: backend
 spec:
   replicas: 1
   selector:
@@ -12,6 +15,7 @@ spec:
     metadata:
       labels:
         app: rag-backend
+        component: backend
     spec:
       containers:
       - name: backend
@@ -19,39 +23,86 @@ spec:
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 8080
-        
+          name: http
+          protocol: TCP
+
+        # ---- 环境变量 ----
+        # 从 ConfigMap 加载非敏感配置
+        envFrom:
+        - configMapRef:
+            name: rag-backend-config
+        # 从 Secret 加载敏感配置（API Key）
+        - secretRef:
+            name: rag-backend-secret
+
+        # 直接定义的环境变量（覆盖或补充 ConfigMap）
         env:
-        - name: MILVUS_ADDRESS
+        # 保留对 MILVUS_ADDRESS 的直接引用（由 ConfigMap 提供降级值）
+        # 如果 ConfigMap 未加载成功，使用此默认值
+        - name: MILVUS_ADDRESS_FALLBACK
           value: "milvus.milvus.svc.cluster.local:19530"
-        - name: OLLAMA_URL
-          value: "http://10.32.118.44:11434"
-        - name: OLLAMA_EMBEDDING_MODEL
-          value: "nomic-embed-text"
-        - name: OLLAMA_MODEL
-          value: "qwen:7b-chat-q4_k_m"
-        
-        # --- 新增启动探针 ---
+
+        # ---- 资源限制 ----
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+
+        # ---- 健康检查 ----
         startupProbe:
           httpGet:
             path: /healthz
             port: 8080
-          # 首次探测前等待60秒，给Milvus一些启动时间
-          initialDelaySeconds: 60
-          # 每5秒探测一次
+          initialDelaySeconds: 30
           periodSeconds: 10
-          # 最多尝试30次（总共约2.5分钟），足够Milvus启动了
-          failureThreshold: 30
-        # ---------------------
+          failureThreshold: 30      # 最多等待 5 分钟
+
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+
+        # ---- 安全上下文 ----
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+
+      # 如果使用私有镜像仓库，取消下面注释
+      # imagePullSecrets:
+      # - name: registry-secret
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: rag-backend-svc # 这就是前端server.js里引用的服务名
-  namespace: default
+  name: rag-backend-svc
+  namespace: rag-app
+  labels:
+    app: rag-backend
+    component: backend
 spec:
+  type: ClusterIP
   selector:
     app: rag-backend
   ports:
   - protocol: TCP
     port: 8080
     targetPort: 8080
+    name: http

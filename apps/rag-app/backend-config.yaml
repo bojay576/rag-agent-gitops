@@ -1,0 +1,74 @@
+# =============================================================================
+# RAG Backend ConfigMap — LLM 提供商配置
+# =============================================================================
+# 支持三种 LLM 后端模式：
+#   1. ollama    - 本地/自托管 Ollama 服务（无需 API Key）
+#   2. openai    - OpenAI 兼容 API（OpenAI / DeepSeek / 通义千问 / Moonshot 等）
+#   3. anthropic - Anthropic Claude API
+#
+# 切换方式：修改 LLM_PROVIDER 的值，并确保 backend-secret.yaml 中配置了对应的 Key
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-backend-config
+  namespace: rag-app
+  labels:
+    app: rag-backend
+data:
+  # ---- LLM 提供商选择 ----
+  # 可选值: ollama | openai | anthropic
+  LLM_PROVIDER: "ollama"
+
+  # ---- Milvus 连接配置 ----
+  MILVUS_ADDRESS: "milvus.milvus.svc.cluster.local:19530"
+
+  # =========================================================================
+  # 方式一：Ollama 模式（本地 LLM，无需 API Key）
+  # 将 LLM_PROVIDER 设为 "ollama" 后，仅需配置以下变量
+  # =========================================================================
+  OLLAMA_URL: "http://10.32.118.44:11434"
+  OLLAMA_MODEL: "qwen2.5:7b"              # 生成模型（回答问题的 LLM）
+  OLLAMA_EMBEDDING_MODEL: "nomic-embed-text"  # 嵌入模型（将文本转为向量）
+
+  # =========================================================================
+  # 方式二：OpenAI 兼容模式（云端 API）
+  # 将 LLM_PROVIDER 设为 "openai" 后，配置以下变量
+  # 兼容服务商：OpenAI、DeepSeek、通义千问、Moonshot、硅基流动、智谱等
+  # =========================================================================
+  # OpenAI 官方
+  # LLM_API_BASE: "https://api.openai.com/v1"
+  # LLM_MODEL: "gpt-4o"
+  # DeepSeek
+  # LLM_API_BASE: "https://api.deepseek.com/v1"
+  # LLM_MODEL: "deepseek-chat"
+  # 通义千问 (DashScope)
+  # LLM_API_BASE: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  # LLM_MODEL="qwen-plus"
+  # 硅基流动 (SiliconFlow)
+  # LLM_API_BASE: "https://api.siliconflow.cn/v1"
+  # LLM_MODEL: "Qwen/Qwen2.5-7B-Instruct"
+  LLM_API_BASE: ""
+  LLM_MODEL: ""
+
+  # Embedding 模型配置（用于向量化知识文档和用户问题）
+  # 支持与 LLM 使用不同的提供商
+  # 留空则跟随 LLM_PROVIDER 使用默认值（Ollama 使用 OLLAMA_EMBEDDING_MODEL，
+  # OpenAI 使用 text-embedding-3-small）
+  EMBEDDING_API_BASE: ""
+  EMBEDDING_MODEL: ""
+
+  # =========================================================================
+  # 方式三：Anthropic 模式
+  # 将 LLM_PROVIDER 设为 "anthropic" 后，配置以下变量
+  # =========================================================================
+  # LLM_API_BASE: "https://api.anthropic.com/v1"
+  # LLM_MODEL: "claude-sonnet-4-6"
+  # 注意：Anthropic 使用独立的 Embedding API（Voyage AI）
+  # EMBEDDING_API_BASE: "https://api.voyageai.com/v1"
+  # EMBEDDING_MODEL: "voyage-3-lite"
+
+  # ---- 通用配置 ----
+  # 检索配置
+  RETRIEVAL_TOP_K: "5"                    # 检索返回的文档片段数量
+  RETRIEVAL_SCORE_THRESHOLD: "0.5"        # 检索相关性最低分数阈值
