@@ -2,7 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: rag-frontend
-  namespace: default
+  namespace: rag-app
+  labels:
+    app: rag-frontend
+    component: frontend
 spec:
   replicas: 1
   selector:
@@ -12,6 +15,7 @@ spec:
     metadata:
       labels:
         app: rag-frontend
+        component: frontend
     spec:
       containers:
       - name: frontend
@@ -19,17 +23,75 @@ spec:
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
+          name: http
+          protocol: TCP
+
+        # ---- 环境变量（后端服务地址）----
+        env:
+        - name: BACKEND_URL
+          value: "http://rag-backend-svc.rag-app.svc.cluster.local:8080"
+
+        # ---- 资源限制 ----
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+        # ---- 健康检查 ----
+        startupProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 12      # 最多等待 1 分钟
+
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+
+        # ---- 安全上下文 ----
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+
+      # 如果使用私有镜像仓库，取消下面注释
+      # imagePullSecrets:
+      # - name: registry-secret
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: rag-frontend-svc
-  namespace: default
+  namespace: rag-app
+  labels:
+    app: rag-frontend
+    component: frontend
 spec:
-  type: NodePort # 将前端服务暴露出来，以便我们可以通过浏览器访问
+  type: NodePort
   selector:
     app: rag-frontend
   ports:
   - protocol: TCP
     port: 3000
     targetPort: 3000
+    name: http
