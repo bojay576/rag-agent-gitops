@@ -16,14 +16,12 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000
 
-RUN addgroup -S app && adduser -S app -G app -u 1000
-
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-USER app
+USER node
 EXPOSE 3000
 
 CMD ["node", "server.js"]

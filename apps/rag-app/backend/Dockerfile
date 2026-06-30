@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system app && adduser --system --ingroup app --uid 1000 app
+RUN groupadd --system --gid 1000 app && useradd --system --uid 1000 --gid app app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
