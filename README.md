@@ -73,6 +73,7 @@ rag-agent-gitops/
 | **kubectl** | ≥ 1.25 | K8s 命令行工具 | `brew install kubectl` 或 [官方文档](https://kubernetes.io/docs/tasks/tools/) |
 | **Helm** | ≥ 3.12 | Milvus 部署（通过 Helm Chart） | `brew install helm` 或 [官方文档](https://helm.sh/docs/intro/install/) |
 | **Docker**（可选） | ≥ 24 | 构建自定义镜像 | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
+| **Ingress Controller**（生产推荐） | nginx-ingress / Traefik 等 | 域名入口和 TLS | [ingress-nginx](https://kubernetes.github.io/ingress-nginx/) |
 
 ### K8s 集群要求
 
@@ -81,6 +82,7 @@ rag-agent-gitops/
 - [ ] 集群已安装默认 StorageClass，或已准备好 hostPath 目录（见下文）
 - [ ] 集群有足够的可用资源（CPU/内存/磁盘）
 - [ ] 如果使用 NodePort 暴露服务，确保节点 IP 可从浏览器访问
+- [ ] 如果使用 Ingress 暴露服务，确保已安装 Ingress Controller（如 nginx-ingress、Traefik）
 
 ### 存储说明
 
@@ -137,6 +139,7 @@ chmod +x deploy.sh
   🎉 RAG Agent GitOps 部署完成！
 ========================================
   前端访问地址: http://192.168.1.100:30000
+  Ingress 地址:  http://rag.127-0-0-1.sslip.io
   Milvus 地址:  milvus.milvus.svc.cluster.local:19530
 
   验证命令:
@@ -320,6 +323,7 @@ kubectl apply -f apps/rag-app/backend-config.yaml
 ```bash
 kubectl apply -f apps/rag-app/backend.yaml
 kubectl apply -f apps/rag-app/frontend.yaml
+kubectl apply -f apps/rag-app/ingress.yaml
 ```
 
 ### 6. 验证部署
@@ -336,7 +340,14 @@ kubectl logs -f deployment/rag-backend -n rag-app
 NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[0].address}')
 NODE_PORT=$(kubectl get svc rag-frontend-svc -n rag-app -o jsonpath='{.spec.ports[0].nodePort}')
 echo "访问地址: http://${NODE_IP}:${NODE_PORT}"
+
+# 获取 Ingress 地址（需要 Ingress Controller）
+kubectl get ingress -n rag-app
 ```
+
+### Ingress 和 TLS
+
+仓库提供 `apps/rag-app/ingress.yaml`，默认使用 `rag.127-0-0-1.sslip.io` 作为开发域名并转发到 `rag-frontend-svc:3000`。生产环境请将 host 改为真实域名，并配合 cert-manager 创建 TLS 证书 Secret。
 
 ---
 

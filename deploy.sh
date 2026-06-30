@@ -129,6 +129,17 @@ check_prerequisites() {
   log_info "集群资源概况："
   kubectl describe nodes 2>/dev/null | grep -A5 "Allocated resources:" | head -6 || true
 
+  if kubectl get ingressclass &>/dev/null; then
+    INGRESS_CLASSES=$(kubectl get ingressclass -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || echo "")
+    if [[ -n "$INGRESS_CLASSES" ]]; then
+      log_info "✓ 检测到 IngressClass: $INGRESS_CLASSES"
+    else
+      log_warn "未检测到 IngressClass。Ingress 清单会被应用，但需要先安装 nginx-ingress、Traefik 等 Controller 才能访问域名入口。"
+    fi
+  else
+    log_warn "当前集群不支持或无法查询 IngressClass，请确认已安装 Ingress Controller。"
+  fi
+
   echo ""
 }
 
@@ -307,6 +318,7 @@ deploy_rag_app() {
 
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/frontend.yaml"
+  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/ingress.yaml"
 
   log_info "✓ RAG 应用清单已提交"
   echo ""
