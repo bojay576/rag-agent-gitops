@@ -38,6 +38,8 @@ rag-agent-gitops/
 │   │   ├── namespace.yaml              # Milvus 命名空间
 │   │   └── pv.yaml                     # Milvus 持久化卷 (etcd/MinIO/standalone)
 │   └── rag-app/
+│       ├── backend/                    # FastAPI 后端源码和 Dockerfile
+│       ├── frontend/                   # Next.js 前端源码和 Dockerfile
 │       ├── namespace.yaml              # 应用命名空间
 │       ├── backend-config.yaml         # 后端 ConfigMap（LLM 提供商配置）
 │       ├── backend-secret.yaml         # 后端 Secret（API Key 等敏感信息）
@@ -315,14 +317,21 @@ echo "访问地址: http://${NODE_IP}:${NODE_PORT}"
 
 ---
 
-## 镜像说明
+## 镜像构建说明
 
 | 镜像 | 说明 | 构建来源 |
 |------|------|----------|
 | `rag-backend:v1.0` | RAG 后端（Python/FastAPI） | `apps/rag-app/backend/` |
 | `rag-frontend:v1.0` | RAG 前端（Node.js/Next.js） | `apps/rag-app/frontend/` |
 
-> **注意：** 当前仓库仅包含 K8s 部署清单。后端和前端应用源码、Dockerfile 位于对应的应用仓库中。镜像默认使用 `imagePullPolicy: IfNotPresent`，需要确保镜像已在集群节点上可用，或配置镜像仓库地址。
+本仓库已经包含后端、前端源码和 Dockerfile。开发或自建镜像时可直接在仓库根目录执行：
+
+```bash
+docker build -t rag-backend:v1.0 apps/rag-app/backend
+docker build -t rag-frontend:v1.0 apps/rag-app/frontend
+```
+
+镜像默认使用 `imagePullPolicy: IfNotPresent`，适合本地 kind/minikube 先导入镜像再部署。生产环境建议推送到 GHCR 或私有镜像仓库，并将 `apps/rag-app/backend.yaml` 与 `apps/rag-app/frontend.yaml` 中的 `image` 字段改为完整镜像地址。
 
 如果你需要修改镜像拉取策略或添加私有仓库认证：
 

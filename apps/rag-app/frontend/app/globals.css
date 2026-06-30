@@ -1,0 +1,144 @@
+:root {
+  color-scheme: light;
+  --background: #f7f8f5;
+  --foreground: #202522;
+  --muted: #637067;
+  --panel: #ffffff;
+  --border: #d7ded6;
+  --accent: #1f7a5c;
+  --accent-strong: #145c45;
+  --warning: #b4561d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+  padding: 32px;
+  background: #eef3ec;
+}
+
+.brand {
+  margin: 0 0 16px;
+  font-size: 28px;
+}
+
+.muted {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.main {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-width: 0;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 32px;
+  overflow: auto;
+}
+
+.message {
+  max-width: 860px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.message.user {
+  align-self: flex-end;
+  border-color: #b7d8cc;
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 18px 32px 28px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+textarea {
+  min-height: 56px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--foreground);
+}
+
+button {
+  align-self: end;
+  min-height: 56px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 22px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  background: var(--muted);
+}
+
+.source {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.error {
+  color: var(--warning);
+}
+
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 22px;
+  }
+
+  .messages,
+  .composer {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .composer {
+    grid-template-columns: 1fr;
+  }
+}
