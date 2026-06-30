@@ -153,6 +153,26 @@ chmod +x deploy.sh
 
 ---
 
+## 本地 Docker Compose 开发
+
+不想启动 Kubernetes 时，可以用 Docker Compose 在本机启动 Milvus、Ollama、后端和前端：
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+
+# 首次使用 Ollama 时拉取模型
+docker compose exec ollama ollama pull qwen2.5:7b
+docker compose exec ollama ollama pull nomic-embed-text
+
+# 导入 knowledge-base/ 文档
+curl -X POST http://localhost:8080/api/knowledge/import-all
+```
+
+前端默认访问 `http://localhost:3000`，后端默认访问 `http://localhost:8080`。Compose 使用与 K8s ConfigMap/Secret 同名的环境变量，可以通过 `.env` 切换 `LLM_PROVIDER`、`OLLAMA_URL`、`LLM_API_BASE` 等配置。
+
+---
+
 ## LLM 提供商配置
 
 本项目支持**多种 LLM 后端**，通过 ConfigMap 和 Secret 灵活切换。
