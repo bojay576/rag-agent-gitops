@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rag-knowledge-import
+  namespace: rag-app
+  labels:
+    app: rag-backend
+    job: knowledge-import
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app: rag-backend
+        job: knowledge-import
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: import
+        image: curlimages/curl:8.11.1
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -ec
+        - |
+          until curl -fsS http://rag-backend-svc.rag-app.svc.cluster.local:8080/healthz; do
+            echo "waiting for rag-backend"
+            sleep 5
+          done
+          curl -fsS -X POST http://rag-backend-svc.rag-app.svc.cluster.local:8080/api/knowledge/import-all

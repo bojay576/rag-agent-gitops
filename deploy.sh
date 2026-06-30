@@ -230,6 +230,16 @@ create_app_config() {
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend-config.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend-secret.yaml"
 
+  if compgen -G "${SCRIPT_DIR}/knowledge-base/*.md" > /dev/null; then
+    kubectl create configmap rag-knowledge-base \
+      -n "$APP_NAMESPACE" \
+      --from-file="${SCRIPT_DIR}/knowledge-base" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    log_info "✓ 知识库 ConfigMap 已创建"
+  else
+    log_warn "未找到 knowledge-base/*.md，跳过知识库 ConfigMap"
+  fi
+
   if [[ "$WITH_OLLAMA" == true ]]; then
     log_info "配置后端使用集群内 Ollama: $OLLAMA_SERVICE_URL"
     kubectl create configmap rag-backend-config \
@@ -299,6 +309,21 @@ deploy_rag_app() {
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/frontend.yaml"
 
   log_info "✓ RAG 应用清单已提交"
+  echo ""
+}
+
+run_knowledge_import() {
+  log_step "步骤 6.5/7：导入知识库"
+
+  kubectl delete job rag-knowledge-import -n "$APP_NAMESPACE" --ignore-not-found=true
+  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/knowledge-import-job.yaml"
+  kubectl wait --for=condition=complete job/rag-knowledge-import \
+    -n "$APP_NAMESPACE" \
+    --timeout=300s 2>/dev/null || {
+      log_warn "知识库导入 Job 未在超时时间内完成，请手动检查："
+      kubectl logs job/rag-knowledge-import -n "$APP_NAMESPACE" || true
+    }
+
   echo ""
 }
 
@@ -417,6 +442,7 @@ main() {
   deploy_ollama
   deploy_rag_app
   wait_for_ready
+  run_knowledge_import
   print_access_info
 
   log_info "部署脚本执行完毕！"

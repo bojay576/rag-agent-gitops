@@ -226,7 +226,24 @@ LLM_API_KEY: "sk-ant-your-anthropic-api-key"
 
 知识库文档存放在 `knowledge-base/` 目录下。系统支持 Markdown 格式的文档。
 
-### 导入知识到 Milvus
+### 自动导入知识到 Milvus
+
+`deploy.sh` 会从 `knowledge-base/*.md` 生成 `rag-knowledge-base` ConfigMap，挂载到后端的 `/knowledge-base`，并在后端就绪后创建 `rag-knowledge-import` Job 调用 `/api/knowledge/import-all`。
+
+如果你更新了知识库文档，可以重新运行部署脚本，或手动重建 ConfigMap 并重跑 Job：
+
+```bash
+kubectl create configmap rag-knowledge-base \
+  -n rag-app \
+  --from-file=knowledge-base \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl rollout restart deployment/rag-backend -n rag-app
+kubectl delete job rag-knowledge-import -n rag-app --ignore-not-found=true
+kubectl apply -f apps/rag-app/knowledge-import-job.yaml
+```
+
+### 手动导入知识到 Milvus
 
 ```bash
 # 方式一：通过后端 API 导入

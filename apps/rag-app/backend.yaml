@@ -41,6 +41,13 @@ spec:
         # 如果 ConfigMap 未加载成功，使用此默认值
         - name: MILVUS_ADDRESS_FALLBACK
           value: "milvus.milvus.svc.cluster.local:19530"
+        - name: KNOWLEDGE_BASE_PATH
+          value: "/knowledge-base"
+
+        volumeMounts:
+        - name: knowledge-base
+          mountPath: /knowledge-base
+          readOnly: true
 
         # ---- 资源限制 ----
         resources:
@@ -84,6 +91,11 @@ spec:
           capabilities:
             drop:
             - ALL
+
+      volumes:
+      - name: knowledge-base
+        configMap:
+          name: rag-knowledge-base
 
       # 如果使用私有镜像仓库，取消下面注释
       # imagePullSecrets:
