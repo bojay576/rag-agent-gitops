@@ -5,7 +5,14 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 try:
-    from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
+    from pymilvus import (
+        Collection,
+        CollectionSchema,
+        DataType,
+        FieldSchema,
+        connections,
+        utility,
+    )
 except Exception:  # pragma: no cover - pymilvus is optional for unit tests.
     Collection = None
     CollectionSchema = None
@@ -39,7 +46,10 @@ class Retriever:
             self._upsert_milvus(chunks)
             return
 
-        existing = {(chunk.source, chunk.title, chunk.content): chunk for chunk in self._memory_chunks}
+        existing = {
+            (chunk.source, chunk.title, chunk.content): chunk
+            for chunk in self._memory_chunks
+        }
         for chunk in chunks:
             existing[(chunk.source, chunk.title, chunk.content)] = chunk
         self._memory_chunks = list(existing.values())
@@ -48,7 +58,9 @@ class Retriever:
         if self._milvus_available():
             return self._search_milvus(vector, top_k)
         scored = [
-            chunk.model_copy(update={"score": self._cosine_similarity(vector, chunk.embedding)})
+            chunk.model_copy(
+                update={"score": self._cosine_similarity(vector, chunk.embedding)}
+            )
             for chunk in self._memory_chunks
             if chunk.embedding
         ]
@@ -56,7 +68,9 @@ class Retriever:
         return scored[:top_k]
 
     def _milvus_available(self) -> bool:
-        return all([Collection, CollectionSchema, DataType, FieldSchema, connections, utility])
+        return all(
+            [Collection, CollectionSchema, DataType, FieldSchema, connections, utility]
+        )
 
     def _connect(self) -> None:
         host, _, port = self.settings.milvus_address.partition(":")
@@ -69,16 +83,22 @@ class Retriever:
 
         schema = CollectionSchema(
             fields=[
-                FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, max_length=64),
+                FieldSchema(
+                    name="id", dtype=DataType.VARCHAR, is_primary=True, max_length=64
+                ),
                 FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
                 FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=256),
                 FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=8192),
-                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dimension),
+                FieldSchema(
+                    name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dimension
+                ),
             ],
             description="RAG knowledge chunks",
         )
         collection = Collection(self.settings.milvus_collection, schema=schema)
-        collection.create_index("embedding", {"index_type": "AUTOINDEX", "metric_type": "COSINE"})
+        collection.create_index(
+            "embedding", {"index_type": "AUTOINDEX", "metric_type": "COSINE"}
+        )
         return collection
 
     def _upsert_milvus(self, chunks: list[DocumentChunk]) -> None:

@@ -6,7 +6,9 @@ from rag.retriever import DocumentChunk, Retriever
 
 
 class KnowledgeImporter:
-    def __init__(self, settings: Settings, embedding: EmbeddingClient, retriever: Retriever) -> None:
+    def __init__(
+        self, settings: Settings, embedding: EmbeddingClient, retriever: Retriever
+    ) -> None:
         self.settings = settings
         self.embedding = embedding
         self.retriever = retriever
@@ -42,7 +44,9 @@ class KnowledgeImporter:
         def flush() -> None:
             content = "\n".join(current_lines).strip()
             if content:
-                chunks.append(DocumentChunk(source=source, title=current_title, content=content))
+                chunks.append(
+                    DocumentChunk(source=source, title=current_title, content=content)
+                )
 
         for line in text.splitlines():
             if line.startswith("## "):
@@ -53,4 +57,6 @@ class KnowledgeImporter:
                 current_lines.append(line)
 
         flush()
-        return chunks or [DocumentChunk(source=source, title=Path(source).name, content=text.strip())]
+        return chunks or [
+            DocumentChunk(source=source, title=Path(source).name, content=text.strip())
+        ]

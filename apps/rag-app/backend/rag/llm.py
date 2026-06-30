@@ -40,7 +40,10 @@ class LLMClient:
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "Answer using the supplied knowledge context. Say when context is missing."},
+                {
+                    "role": "system",
+                    "content": "Answer using the supplied knowledge context. Say when context is missing.",
+                },
                 {"role": "user", "content": self._prompt(question, context)},
             ],
         }
@@ -55,7 +58,9 @@ class LLMClient:
         return data["choices"][0]["message"]["content"].strip()
 
     async def _answer_anthropic(self, question: str, context: str) -> str:
-        base_url = self.settings.llm_api_base.rstrip("/") or "https://api.anthropic.com/v1"
+        base_url = (
+            self.settings.llm_api_base.rstrip("/") or "https://api.anthropic.com/v1"
+        )
         model = self.settings.llm_model or "claude-sonnet-4-6"
         headers = self._auth_headers()
         headers["anthropic-version"] = "2023-06-01"
@@ -65,7 +70,9 @@ class LLMClient:
             "messages": [{"role": "user", "content": self._prompt(question, context)}],
         }
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(f"{base_url}/messages", headers=headers, json=payload)
+            response = await client.post(
+                f"{base_url}/messages", headers=headers, json=payload
+            )
             response.raise_for_status()
             data = response.json()
         return "".join(part.get("text", "") for part in data.get("content", [])).strip()
@@ -74,7 +81,9 @@ class LLMClient:
         return f"Knowledge context:\n{context or '(no matching context)'}\n\nQuestion: {question}\nAnswer:"
 
     def _auth_headers(self) -> dict[str, str]:
-        if not self.settings.llm_api_key or self.settings.llm_api_key.startswith("your-"):
+        if not self.settings.llm_api_key or self.settings.llm_api_key.startswith(
+            "your-"
+        ):
             return {}
         return {"Authorization": f"Bearer {self.settings.llm_api_key}"}
 

@@ -22,7 +22,9 @@ class ImportRequest(BaseModel):
 async def startup_event() -> None:
     settings = get_settings()
     if settings.auto_import_knowledge:
-        importer = KnowledgeImporter(settings, EmbeddingClient(settings), Retriever(settings))
+        importer = KnowledgeImporter(
+            settings, EmbeddingClient(settings), Retriever(settings)
+        )
         await importer.import_all()
 
 
@@ -51,7 +53,9 @@ async def chat(request: ChatRequest) -> dict[str, object]:
 @app.post("/api/knowledge/import")
 async def import_document(request: ImportRequest) -> dict[str, object]:
     settings = get_settings()
-    importer = KnowledgeImporter(settings, EmbeddingClient(settings), Retriever(settings))
+    importer = KnowledgeImporter(
+        settings, EmbeddingClient(settings), Retriever(settings)
+    )
     imported = await importer.import_file(request.path)
     return {"imported": imported}
 
@@ -59,6 +63,8 @@ async def import_document(request: ImportRequest) -> dict[str, object]:
 @app.post("/api/knowledge/import-all")
 async def import_all() -> dict[str, object]:
     settings = get_settings()
-    importer = KnowledgeImporter(settings, EmbeddingClient(settings), Retriever(settings))
+    importer = KnowledgeImporter(
+        settings, EmbeddingClient(settings), Retriever(settings)
+    )
     imported = await importer.import_all()
     return {"imported": imported}

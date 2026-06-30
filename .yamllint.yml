@@ -1,0 +1,19 @@
+extends: default
+
+ignore: |
+  **/.venv/**
+  **/node_modules/**
+  **/.next/**
+
+rules:
+  braces: disable
+  comments-indentation: disable
+  document-start: disable
+  line-length:
+    max: 120
+    level: warning
+  truthy:
+    allowed-values: ["true", "false", "on", "off"]
+  indentation:
+    spaces: 2
+    indent-sequences: false
