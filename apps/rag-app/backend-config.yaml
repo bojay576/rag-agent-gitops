@@ -27,7 +27,7 @@ data:
   # 方式一：Ollama 模式（本地 LLM，无需 API Key）
   # 将 LLM_PROVIDER 设为 "ollama" 后，仅需配置以下变量
   # =========================================================================
-  OLLAMA_URL: "http://10.32.118.44:11434"
+  OLLAMA_URL: "http://ollama.rag-app.svc.cluster.local:11434"
   OLLAMA_MODEL: "qwen2.5:7b"              # 生成模型（回答问题的 LLM）
   OLLAMA_EMBEDDING_MODEL: "nomic-embed-text"  # 嵌入模型（将文本转为向量）
 

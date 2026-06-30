@@ -3,7 +3,10 @@
 # RAG Agent GitOps — 一键部署脚本
 # =============================================================================
 # 用途：在全新的 K8s 集群上完成 RAG 知识库系统的完整部署
-# 用法：chmod +x deploy.sh && ./deploy.sh
+# 用法：
+#   chmod +x deploy.sh && ./deploy.sh
+#   ./deploy.sh --with-ollama
+#   ./deploy.sh --ollama-url http://192.168.1.100:11434
 #
 # 前置条件（详见 README.md）：
 #   1. Kubernetes 集群 ≥ 1.25（k3s/kind/minikube 均可）
@@ -33,6 +36,58 @@ MILVUS_NAMESPACE="milvus"
 APP_NAMESPACE="rag-app"
 MILVUS_HELM_RELEASE="milvus"
 MILVUS_HELM_REPO="https://zilliztech.github.io/milvus-helm/"
+WITH_OLLAMA=false
+OLLAMA_URL_OVERRIDE=""
+OLLAMA_SERVICE_URL="http://ollama.${APP_NAMESPACE}.svc.cluster.local:11434"
+
+usage() {
+  cat <<EOF
+用法: ./deploy.sh [选项]
+
+选项:
+  --with-ollama             在 rag-app 命名空间内部署 Ollama，并自动配置后端使用集群内 Service
+  --ollama-url URL          使用外部 Ollama 地址，例如 http://192.168.1.100:11434
+  -h, --help                显示帮助
+
+示例:
+  ./deploy.sh --with-ollama
+  ./deploy.sh --ollama-url http://192.168.1.100:11434
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --with-ollama)
+        WITH_OLLAMA=true
+        shift
+        ;;
+      --ollama-url)
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          log_error "--ollama-url 需要提供 URL"
+          usage
+          exit 1
+        fi
+        OLLAMA_URL_OVERRIDE="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        log_error "未知参数: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "$WITH_OLLAMA" == true && -n "$OLLAMA_URL_OVERRIDE" ]]; then
+    log_error "--with-ollama 和 --ollama-url 不能同时使用"
+    exit 1
+  fi
+}
 
 # ---- 步骤 0：前置条件检查 ----
 check_prerequisites() {
@@ -175,7 +230,64 @@ create_app_config() {
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend-config.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend-secret.yaml"
 
+  if [[ "$WITH_OLLAMA" == true ]]; then
+    log_info "配置后端使用集群内 Ollama: $OLLAMA_SERVICE_URL"
+    kubectl create configmap rag-backend-config \
+      -n "$APP_NAMESPACE" \
+      --from-literal=LLM_PROVIDER="ollama" \
+      --from-literal=OLLAMA_URL="$OLLAMA_SERVICE_URL" \
+      --from-literal=OLLAMA_MODEL="qwen2.5:7b" \
+      --from-literal=OLLAMA_EMBEDDING_MODEL="nomic-embed-text" \
+      --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
+      --from-literal=LLM_API_BASE="" \
+      --from-literal=LLM_MODEL="" \
+      --from-literal=EMBEDDING_API_BASE="" \
+      --from-literal=EMBEDDING_MODEL="" \
+      --from-literal=RETRIEVAL_TOP_K="5" \
+      --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  elif [[ -n "$OLLAMA_URL_OVERRIDE" ]]; then
+    log_info "配置后端使用外部 Ollama: $OLLAMA_URL_OVERRIDE"
+    kubectl create configmap rag-backend-config \
+      -n "$APP_NAMESPACE" \
+      --from-literal=LLM_PROVIDER="ollama" \
+      --from-literal=OLLAMA_URL="$OLLAMA_URL_OVERRIDE" \
+      --from-literal=OLLAMA_MODEL="qwen2.5:7b" \
+      --from-literal=OLLAMA_EMBEDDING_MODEL="nomic-embed-text" \
+      --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
+      --from-literal=LLM_API_BASE="" \
+      --from-literal=LLM_MODEL="" \
+      --from-literal=EMBEDDING_API_BASE="" \
+      --from-literal=EMBEDDING_MODEL="" \
+      --from-literal=RETRIEVAL_TOP_K="5" \
+      --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  fi
+
   log_info "✓ ConfigMap 和 Secret 已创建"
+  echo ""
+}
+
+# ---- 步骤 4.5：可选部署 Ollama ----
+deploy_ollama() {
+  if [[ "$WITH_OLLAMA" != true ]]; then
+    return
+  fi
+
+  log_step "步骤 4.5/7：部署 Ollama（可选）"
+
+  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/ollama.yaml"
+  log_info "等待 Ollama Pod 就绪..."
+  kubectl wait --for=condition=available deployment/ollama \
+    -n "$APP_NAMESPACE" \
+    --timeout=300s 2>/dev/null || {
+      log_warn "Ollama 等待超时，请手动检查："
+      kubectl get pods -n "$APP_NAMESPACE" -l app=ollama
+    }
+
+  log_warn "Ollama 镜像不预装模型。首次使用前请进入 Pod 执行："
+  log_warn "  kubectl exec -n ${APP_NAMESPACE} deployment/ollama -- ollama pull qwen2.5:7b"
+  log_warn "  kubectl exec -n ${APP_NAMESPACE} deployment/ollama -- ollama pull nomic-embed-text"
   echo ""
 }
 
@@ -302,6 +414,7 @@ main() {
   create_namespaces
   deploy_milvus
   create_app_config
+  deploy_ollama
   deploy_rag_app
   wait_for_ready
   print_access_info
@@ -310,4 +423,5 @@ main() {
 }
 
 # 执行主流程
-main "$@"
+parse_args "$@"
+main

@@ -111,6 +111,12 @@ git clone <your-repo-url> && cd rag-agent-gitops
 # 3. 一键部署
 chmod +x deploy.sh
 ./deploy.sh
+
+# 可选：在集群内部署 Ollama
+./deploy.sh --with-ollama
+
+# 或使用外部 Ollama
+./deploy.sh --ollama-url http://192.168.1.100:11434
 ```
 
 部署脚本会自动完成：
@@ -152,12 +158,12 @@ chmod +x deploy.sh
 
 **适用场景：** 离线环境、数据隐私敏感、无 API 调用费用。
 
-前置条件：集群内或网络可达的 Ollama 服务。
+前置条件：集群内或网络可达的 Ollama 服务。`deploy.sh --with-ollama` 会在 `rag-app` 命名空间内部署 Ollama，并自动把后端 `OLLAMA_URL` 设置为 `http://ollama.rag-app.svc.cluster.local:11434`。如果你已有外部 Ollama，可以使用 `deploy.sh --ollama-url http://<host>:11434`。
 
 ```yaml
 # backend-config.yaml (ConfigMap)
 LLM_PROVIDER: "ollama"
-OLLAMA_URL: "http://<ollama-ip>:11434"
+OLLAMA_URL: "http://ollama.rag-app.svc.cluster.local:11434"
 OLLAMA_MODEL: "qwen2.5:7b"            # 生成模型
 OLLAMA_EMBEDDING_MODEL: "nomic-embed-text"  # 嵌入模型
 ```
