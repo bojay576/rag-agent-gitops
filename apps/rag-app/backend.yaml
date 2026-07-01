@@ -19,8 +19,8 @@ spec:
     spec:
       containers:
       - name: backend
-        image: rag-backend:v1.0
-        imagePullPolicy: IfNotPresent
+        image: ghcr.io/bojay576/rag-backend:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
           name: http

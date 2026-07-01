@@ -375,17 +375,19 @@ kubectl get ingress -n rag-app
 
 | 镜像 | 说明 | 构建来源 |
 |------|------|----------|
-| `rag-backend:v1.0` | RAG 后端（Python/FastAPI） | `apps/rag-app/backend/` |
-| `rag-frontend:v1.0` | RAG 前端（Node.js/Next.js） | `apps/rag-app/frontend/` |
+| `ghcr.io/bojay576/rag-backend:latest` | RAG 后端（Python/FastAPI） | `apps/rag-app/backend/` |
+| `ghcr.io/bojay576/rag-frontend:latest` | RAG 前端（Node.js/Next.js） | `apps/rag-app/frontend/` |
 
-本仓库已经包含后端、前端源码和 Dockerfile。开发或自建镜像时可直接在仓库根目录执行：
+GitHub Actions 会在推送 `main` 后构建并推送 `latest` 和 commit SHA 两类 tag 到 GHCR。K8s 清单默认使用 GHCR 镜像和 `imagePullPolicy: Always`，全新集群无需手动预加载本地镜像。
+
+本地开发或自建镜像时可直接在仓库根目录执行：
 
 ```bash
 docker build -t rag-backend:v1.0 apps/rag-app/backend
 docker build -t rag-frontend:v1.0 apps/rag-app/frontend
 ```
 
-镜像默认使用 `imagePullPolicy: IfNotPresent`，适合本地 kind/minikube 先导入镜像再部署。生产环境建议推送到 GHCR 或私有镜像仓库，并将 `apps/rag-app/backend.yaml` 与 `apps/rag-app/frontend.yaml` 中的 `image` 字段改为完整镜像地址。
+如果使用本地镜像，请将 `apps/rag-app/backend.yaml` 与 `apps/rag-app/frontend.yaml` 中的 `image` 字段改为本地 tag，并把 `imagePullPolicy` 调整为 `IfNotPresent`。
 
 如果你需要修改镜像拉取策略或添加私有仓库认证：
 

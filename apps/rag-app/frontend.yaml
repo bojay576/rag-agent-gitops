@@ -19,8 +19,8 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: rag-frontend:v1.0
-        imagePullPolicy: IfNotPresent
+        image: ghcr.io/bojay576/rag-frontend:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 3000
           name: http
