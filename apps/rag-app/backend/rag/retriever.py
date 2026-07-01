@@ -65,7 +65,7 @@ class Retriever:
             if chunk.embedding
         ]
         scored.sort(key=lambda chunk: chunk.score or 0, reverse=True)
-        return scored[:top_k]
+        return self._filter_by_threshold(scored)[:top_k]
 
     def _milvus_available(self) -> bool:
         return all(
@@ -136,7 +136,15 @@ class Retriever:
                     score=float(hit.score),
                 )
             )
-        return chunks
+        return self._filter_by_threshold(chunks)
+
+    def _filter_by_threshold(self, chunks: list[DocumentChunk]) -> list[DocumentChunk]:
+        return [chunk for chunk in chunks if self._passes_threshold(chunk.score)]
+
+    def _passes_threshold(self, score: float | None) -> bool:
+        if score is None:
+            return True
+        return score >= self.settings.retrieval_score_threshold
 
     def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
         if not left or not right:
