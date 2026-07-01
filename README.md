@@ -137,10 +137,10 @@ chmod +x deploy.sh
 
 部署脚本会自动完成：
 1. ✅ 检查前置条件（kubectl、helm、集群状态）
-2. ✅ 在节点上创建 hostPath 存储目录
+2. ✅ 检查默认 StorageClass，必要时安装 local-path-provisioner
 3. ✅ 创建命名空间（`milvus` 和 `rag-app`）
-4. ✅ 部署 Milvus 独立版（通过 Helm）
-5. ✅ 创建 Milvus PV 资源
+4. ✅ 以轻量 standalone 模式部署 Milvus（通过 Helm）
+5. ✅ 通过 PVC 动态申请 Milvus 存储
 6. ✅ 交互式选择 LLM 模式并生成 ConfigMap/Secret
 7. ✅ 默认部署集群内 Ollama，或按参数使用外部 Ollama/云端 API
 8. ✅ 部署 RAG 后端和前端
@@ -329,14 +329,19 @@ helm repo add milvus https://zilliztech.github.io/milvus-helm/
 helm repo update
 helm upgrade --install milvus milvus/milvus \
   --namespace milvus \
-  --set mode=standalone \
-  --set persistence.enabled=true \
-  --set persistence.persistentVolumeClaim.etcd.storageClass=manual \
-  --set persistence.persistentVolumeClaim.minio.storageClass=manual \
-  --set persistence.persistentVolumeClaim.standalone.storageClass=manual
-
-# 创建 PV 资源
-kubectl apply -f apps/milvus/pv.yaml
+  --create-namespace \
+  --reset-values \
+  --set cluster.enabled=false \
+  --set streaming.enabled=false \
+  --set pulsarv3.enabled=false \
+  --set pulsar.enabled=false \
+  --set kafka.enabled=false \
+  --set woodpecker.enabled=false \
+  --set minio.mode=standalone \
+  --set minio.replicas=1 \
+  --set minio.persistence.size=20Gi \
+  --set etcd.replicaCount=1 \
+  --set standalone.persistence.persistentVolumeClaim.size=20Gi
 ```
 
 ### 4. 配置 LLM

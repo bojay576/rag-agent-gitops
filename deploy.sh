@@ -51,6 +51,19 @@ EMBEDDING_MODEL=""
 EMBEDDING_API_KEY=""
 LLM_MODE_EXPLICIT=false
 SKIP_OLLAMA_REQUESTED=false
+MILVUS_HELM_VALUES=(
+  --set cluster.enabled=false
+  --set streaming.enabled=false
+  --set pulsarv3.enabled=false
+  --set pulsar.enabled=false
+  --set kafka.enabled=false
+  --set woodpecker.enabled=false
+  --set minio.mode=standalone
+  --set minio.replicas=1
+  --set minio.persistence.size=20Gi
+  --set etcd.replicaCount=1
+  --set standalone.persistence.persistentVolumeClaim.size=20Gi
+)
 
 usage() {
   cat <<EOF
@@ -533,18 +546,15 @@ deploy_milvus() {
     log_warn "Milvus 已安装，执行更新..."
     helm upgrade "$MILVUS_HELM_RELEASE" milvus/milvus \
       --namespace "$MILVUS_NAMESPACE" \
-      --set mode=standalone \
-      --set image.all.repository="milvusdb/milvus" \
-      --set image.all.tag="v2.4.0" \
+      --reset-values \
+      "${MILVUS_HELM_VALUES[@]}" \
       --wait \
       --timeout 10m
   else
     log_info "安装 Milvus Standalone..."
     helm install "$MILVUS_HELM_RELEASE" milvus/milvus \
       --namespace "$MILVUS_NAMESPACE" \
-      --set mode=standalone \
-      --set image.all.repository="milvusdb/milvus" \
-      --set image.all.tag="v2.4.0" \
+      "${MILVUS_HELM_VALUES[@]}" \
       --wait \
       --timeout 10m
   fi
