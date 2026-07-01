@@ -6,7 +6,8 @@
 #   2. openai    - OpenAI 兼容 API（OpenAI / DeepSeek / 通义千问 / Moonshot 等）
 #   3. anthropic - Anthropic Claude API
 #
-# 切换方式：修改 LLM_PROVIDER 的值，并确保 backend-secret.yaml 中配置了对应的 Key
+# 此文件仅作为手动部署示例。推荐使用 deploy.sh 交互式生成 ConfigMap 和 Secret。
+# 如需手动部署，请使用 kubectl create secret generic rag-backend-secret 创建 API Key。
 # =============================================================================
 apiVersion: v1
 kind: ConfigMap

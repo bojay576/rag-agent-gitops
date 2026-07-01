@@ -41,8 +41,7 @@ rag-agent-gitops/
 │       ├── backend/                    # FastAPI 后端源码和 Dockerfile
 │       ├── frontend/                   # Next.js 前端源码和 Dockerfile
 │       ├── namespace.yaml              # 应用命名空间
-│       ├── backend-config.yaml         # 后端 ConfigMap（LLM 提供商配置）
-│       ├── backend-secret.yaml         # 后端 Secret（API Key 等敏感信息）
+│       ├── backend-config.example.yaml # 手动部署时可参考的后端 ConfigMap 示例
 │       ├── backend.yaml                # 后端 Deployment + Service
 │       └── frontend.yaml               # 前端 Deployment + Service
 └── knowledge-base/                     # 知识库文档（会被向量化存入 Milvus）
@@ -186,7 +185,7 @@ docker compose exec ollama ollama pull nomic-embed-text
 curl -X POST http://localhost:8080/api/knowledge/import-all
 ```
 
-前端默认访问 `http://localhost:3000`，后端默认访问 `http://localhost:8080`。Compose 使用与 K8s ConfigMap/Secret 同名的环境变量，可以通过 `.env` 切换 `LLM_PROVIDER`、`OLLAMA_URL`、`LLM_API_BASE` 等配置。
+前端默认访问 `http://localhost:3000`，后端默认访问 `http://localhost:8080`。`.env.example` 仅用于 Docker Compose 本地开发；Kubernetes 部署请通过 `deploy.sh` 交互式生成 ConfigMap/Secret。
 
 ---
 
@@ -208,7 +207,7 @@ kubectl exec -n rag-app deployment/ollama -- ollama pull nomic-embed-text
 ```
 
 ```yaml
-# backend-config.yaml (ConfigMap)
+# deploy.sh 生成的 rag-backend-config 中会包含：
 LLM_PROVIDER: "ollama"
 OLLAMA_URL: "http://ollama.rag-app.svc.cluster.local:11434"
 OLLAMA_MODEL: "qwen2.5:7b"            # 生成模型

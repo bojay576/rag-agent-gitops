@@ -548,7 +548,7 @@ create_app_config() {
     ollama_model="$OLLAMA_MODEL_DEFAULT"
     ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
   elif [[ "$LLM_PROVIDER" == "ollama" ]]; then
-    log_warn "未部署 Ollama；请确保 backend-config.yaml/backend-secret.yaml 已配置可用的 Ollama。"
+    log_warn "未部署 Ollama；请使用 --ollama-url 指定外部 Ollama，或选择集群内 Ollama 模式。"
   else
     log_info "配置后端使用云端 API: ${LLM_PROVIDER} (${LLM_MODEL} @ ${LLM_API_BASE})"
   fi
