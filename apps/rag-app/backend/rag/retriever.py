@@ -1,4 +1,5 @@
 import math
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +24,8 @@ except Exception:  # pragma: no cover - pymilvus is optional for unit tests.
 
 from config import Settings
 
+logger = logging.getLogger(__name__)
+
 
 class DocumentChunk(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -42,10 +45,18 @@ class Retriever:
     async def upsert(self, chunks: list[DocumentChunk]) -> None:
         if not chunks:
             return
-        if self._milvus_available():
-            self._upsert_milvus(chunks)
-            return
+        if self._milvus_client_installed():
+            try:
+                self._upsert_milvus(chunks)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Milvus upsert failed; falling back to memory store: %s", exc
+                )
 
+        self._upsert_memory(chunks)
+
+    def _upsert_memory(self, chunks: list[DocumentChunk]) -> None:
         existing = {
             (chunk.source, chunk.title, chunk.content): chunk
             for chunk in self._memory_chunks
@@ -55,8 +66,18 @@ class Retriever:
         self._memory_chunks = list(existing.values())
 
     async def search(self, vector: list[float], top_k: int = 5) -> list[DocumentChunk]:
-        if self._milvus_available():
-            return self._search_milvus(vector, top_k)
+        if self._milvus_client_installed():
+            try:
+                return self._search_milvus(vector, top_k)
+            except Exception as exc:
+                logger.warning(
+                    "Milvus search failed; falling back to memory store: %s", exc
+                )
+        return self._search_memory(vector, top_k)
+
+    def _search_memory(
+        self, vector: list[float], top_k: int = 5
+    ) -> list[DocumentChunk]:
         scored = [
             chunk.model_copy(
                 update={"score": self._cosine_similarity(vector, chunk.embedding)}
@@ -67,7 +88,7 @@ class Retriever:
         scored.sort(key=lambda chunk: chunk.score or 0, reverse=True)
         return self._filter_by_threshold(scored)[:top_k]
 
-    def _milvus_available(self) -> bool:
+    def _milvus_client_installed(self) -> bool:
         return all(
             [Collection, CollectionSchema, DataType, FieldSchema, connections, utility]
         )
