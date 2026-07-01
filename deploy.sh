@@ -410,13 +410,14 @@ check_prerequisites() {
   log_info "✓ 集群连接正常"
 
   # 检查集群节点状态
-  NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | grep -vc Ready || echo "0")
+  NODES_OUTPUT=$(kubectl get nodes --no-headers 2>/dev/null || true)
+  NOT_READY=$(printf '%s\n' "$NODES_OUTPUT" | awk 'NF && $2 !~ /(^|,)Ready(,|$)/ { count++ } END { print count + 0 }')
   if [[ "$NOT_READY" -gt 0 ]]; then
     log_warn "有 $NOT_READY 个节点未就绪，部署可能失败"
     kubectl get nodes
   else
-    NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l || echo "0")
-    log_info "✓ 集群节点数: $NODE_COUNT（全部就绪）"
+    NODE_COUNT=$(printf '%s\n' "$NODES_OUTPUT" | awk 'NF { count++ } END { print count + 0 }')
+    log_info "✓ 集群节点数: ${NODE_COUNT}（全部就绪）"
   fi
 
   # 检查 Helm
