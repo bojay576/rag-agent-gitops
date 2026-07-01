@@ -114,11 +114,14 @@ git clone <your-repo-url> && cd rag-agent-gitops
 chmod +x deploy.sh
 ./deploy.sh
 
-# 可选：在集群内部署 Ollama
+# 显式使用集群内 Ollama（默认行为）
 ./deploy.sh --with-ollama
 
 # 或使用外部 Ollama
 ./deploy.sh --ollama-url http://192.168.1.100:11434
+
+# 或不部署 Ollama，使用已在 ConfigMap/Secret 中配置好的云端 LLM
+./deploy.sh --no-ollama
 ```
 
 部署脚本会自动完成：
@@ -128,9 +131,11 @@ chmod +x deploy.sh
 4. ✅ 部署 Milvus 独立版（通过 Helm）
 5. ✅ 创建 Milvus PV 资源
 6. ✅ 创建应用 ConfigMap 和 Secret
-7. ✅ 部署 RAG 后端和前端
-8. ✅ 等待所有 Pod 就绪
-9. ✅ 输出访问地址
+7. ✅ 默认部署集群内 Ollama，或按参数使用外部/云端 LLM
+8. ✅ 部署 RAG 后端和前端
+9. ✅ 等待所有 Pod 就绪
+10. ✅ 在 Ollama API 和嵌入模型可用时自动导入知识库
+11. ✅ 输出访问地址
 
 部署完成后，脚本会输出类似以下信息：
 
@@ -181,7 +186,14 @@ curl -X POST http://localhost:8080/api/knowledge/import-all
 
 **适用场景：** 离线环境、数据隐私敏感、无 API 调用费用。
 
-前置条件：集群内或网络可达的 Ollama 服务。`deploy.sh --with-ollama` 会在 `rag-app` 命名空间内部署 Ollama，并自动把后端 `OLLAMA_URL` 设置为 `http://ollama.rag-app.svc.cluster.local:11434`。如果你已有外部 Ollama，可以使用 `deploy.sh --ollama-url http://<host>:11434`。
+`deploy.sh` 默认会在 `rag-app` 命名空间内部署 Ollama，并自动把后端 `OLLAMA_URL` 设置为 `http://ollama.rag-app.svc.cluster.local:11434`。如果你已有外部 Ollama，可以使用 `deploy.sh --ollama-url http://<host>:11434`；如果使用 OpenAI/Anthropic 等云端 LLM，可以使用 `deploy.sh --no-ollama`。
+
+Ollama 镜像不预装模型。首次部署后请拉取所需模型：
+
+```bash
+kubectl exec -n rag-app deployment/ollama -- ollama pull qwen2.5:7b
+kubectl exec -n rag-app deployment/ollama -- ollama pull nomic-embed-text
+```
 
 ```yaml
 # backend-config.yaml (ConfigMap)
@@ -251,7 +263,7 @@ LLM_API_KEY: "sk-ant-your-anthropic-api-key"
 
 ### 自动导入知识到 Milvus
 
-`deploy.sh` 会从 `knowledge-base/*.md` 生成 `rag-knowledge-base` ConfigMap，挂载到后端的 `/knowledge-base`，并在后端就绪后创建 `rag-knowledge-import` Job 调用 `/api/knowledge/import-all`。
+`deploy.sh` 会从 `knowledge-base/*.md` 生成 `rag-knowledge-base` ConfigMap，挂载到后端的 `/knowledge-base`，并在后端就绪后创建 `rag-knowledge-import` Job 调用 `/api/knowledge/import-all`。如果使用默认 Ollama 模式，脚本会先检查 Ollama API 和 `nomic-embed-text` 是否可用；模型尚未拉取时会跳过自动导入并打印手动导入命令。
 
 如果你更新了知识库文档，可以重新运行部署脚本，或手动重建 ConfigMap 并重跑 Job：
 
