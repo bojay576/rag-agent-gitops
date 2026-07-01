@@ -7,7 +7,7 @@
 #   chmod +x deploy.sh && ./deploy.sh
 #   ./deploy.sh --with-ollama
 #   ./deploy.sh --ollama-url http://192.168.1.100:11434
-#   ./deploy.sh --no-ollama
+#   ./deploy.sh --llm-provider openai
 #
 # 前置条件（详见 README.md）：
 #   1. Kubernetes 集群 ≥ 1.25（k3s/kind/minikube 均可）
@@ -42,6 +42,15 @@ OLLAMA_URL_OVERRIDE=""
 OLLAMA_SERVICE_URL="http://ollama.${APP_NAMESPACE}.svc.cluster.local:11434"
 OLLAMA_MODEL_DEFAULT="qwen2.5:7b"
 OLLAMA_EMBEDDING_MODEL_DEFAULT="nomic-embed-text"
+LLM_PROVIDER=""
+LLM_API_BASE=""
+LLM_MODEL=""
+LLM_API_KEY=""
+EMBEDDING_API_BASE=""
+EMBEDDING_MODEL=""
+EMBEDDING_API_KEY=""
+LLM_MODE_EXPLICIT=false
+SKIP_OLLAMA_REQUESTED=false
 
 usage() {
   cat <<EOF
@@ -49,16 +58,35 @@ usage() {
 
 选项:
   --with-ollama             在 rag-app 命名空间内部署 Ollama，并自动配置后端使用集群内 Service（默认）
-  --no-ollama               不部署 Ollama，适用于已在 ConfigMap/Secret 中配置云端 LLM 的场景
+  --no-ollama               不部署 Ollama，交互式选择云端 API 或配合 --llm-provider 使用
   --ollama-url URL          使用外部 Ollama 地址，例如 http://192.168.1.100:11434
+  --llm-provider PROVIDER   LLM 提供商: ollama | openai | anthropic
+  --llm-api-base URL        云端 LLM API Base，例如 https://api.openai.com/v1
+  --llm-model MODEL         云端 LLM 模型名称
+  --llm-api-key KEY         云端 LLM API Key
+  --embedding-api-base URL  Embedding API Base
+  --embedding-model MODEL   Embedding 模型名称
+  --embedding-api-key KEY   Embedding API Key（默认复用 LLM API Key）
   -h, --help                显示帮助
 
 示例:
   ./deploy.sh
   ./deploy.sh --with-ollama
   ./deploy.sh --ollama-url http://192.168.1.100:11434
-  ./deploy.sh --no-ollama
+  ./deploy.sh --llm-provider openai
+  ./deploy.sh --llm-provider openai --llm-api-base https://api.openai.com/v1 --llm-model gpt-4o
 EOF
+}
+
+require_arg() {
+  local option="$1"
+  local value="${2:-}"
+
+  if [[ -z "$value" ]]; then
+    log_error "${option} 需要提供参数值"
+    usage
+    exit 1
+  fi
 }
 
 parse_args() {
@@ -66,20 +94,66 @@ parse_args() {
     case "$1" in
       --with-ollama)
         WITH_OLLAMA=true
+        LLM_PROVIDER="ollama"
+        LLM_MODE_EXPLICIT=true
         shift
         ;;
       --no-ollama)
         WITH_OLLAMA=false
+        SKIP_OLLAMA_REQUESTED=true
         shift
         ;;
       --ollama-url)
-        if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          log_error "--ollama-url 需要提供 URL"
-          usage
-          exit 1
-        fi
+        require_arg "$1" "${2:-}"
         OLLAMA_URL_OVERRIDE="$2"
         WITH_OLLAMA=false
+        LLM_PROVIDER="ollama"
+        LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --llm-provider)
+        require_arg "$1" "${2:-}"
+        LLM_PROVIDER="$2"
+        LLM_MODE_EXPLICIT=true
+        if [[ "$LLM_PROVIDER" != "ollama" ]]; then
+          WITH_OLLAMA=false
+        fi
+        shift 2
+        ;;
+      --llm-api-base)
+        require_arg "$1" "${2:-}"
+        LLM_API_BASE="${2:-}"
+        LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --llm-model)
+        require_arg "$1" "${2:-}"
+        LLM_MODEL="${2:-}"
+        LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --llm-api-key)
+        require_arg "$1" "${2:-}"
+        LLM_API_KEY="${2:-}"
+        LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --embedding-api-base)
+        require_arg "$1" "${2:-}"
+        EMBEDDING_API_BASE="${2:-}"
+        LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --embedding-model)
+        require_arg "$1" "${2:-}"
+        EMBEDDING_MODEL="${2:-}"
+        LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --embedding-api-key)
+        require_arg "$1" "${2:-}"
+        EMBEDDING_API_KEY="${2:-}"
+        LLM_MODE_EXPLICIT=true
         shift 2
         ;;
       -h|--help)
@@ -94,6 +168,226 @@ parse_args() {
     esac
   done
 
+  if [[ "$SKIP_OLLAMA_REQUESTED" == true && "$LLM_MODE_EXPLICIT" != true && ! -t 0 ]]; then
+    log_error "非交互式使用 --no-ollama 时，请同时提供 --llm-provider openai|anthropic 以及 API 参数。"
+    exit 1
+  fi
+
+  case "$LLM_PROVIDER" in
+    ""|ollama|openai|anthropic)
+      ;;
+    *)
+      log_error "不支持的 LLM_PROVIDER: $LLM_PROVIDER"
+      exit 1
+      ;;
+  esac
+
+  if [[ "$SKIP_OLLAMA_REQUESTED" == true && "$LLM_PROVIDER" == "ollama" ]]; then
+    log_error "--no-ollama 不能和 Ollama 模式同时使用，请选择 --llm-provider openai|anthropic。"
+    exit 1
+  fi
+
+}
+
+prompt_with_default() {
+  local prompt="$1"
+  local default="$2"
+  local value
+
+  read -r -p "${prompt} [${default}]: " value
+  echo "${value:-$default}"
+}
+
+prompt_secret() {
+  local prompt="$1"
+  local value
+
+  read -r -s -p "$prompt" value
+  echo "" >&2
+  echo "$value"
+}
+
+configure_ollama_mode() {
+  LLM_PROVIDER="ollama"
+  LLM_API_BASE=""
+  LLM_MODEL=""
+  LLM_API_KEY=""
+  EMBEDDING_API_BASE=""
+  EMBEDDING_MODEL=""
+  EMBEDDING_API_KEY=""
+}
+
+configure_api_defaults() {
+  if [[ "$LLM_PROVIDER" == "openai" ]]; then
+    LLM_API_BASE="${LLM_API_BASE:-https://api.openai.com/v1}"
+    LLM_MODEL="${LLM_MODEL:-gpt-4o}"
+    EMBEDDING_API_BASE="${EMBEDDING_API_BASE:-$LLM_API_BASE}"
+    EMBEDDING_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
+  elif [[ "$LLM_PROVIDER" == "anthropic" ]]; then
+    LLM_API_BASE="${LLM_API_BASE:-https://api.anthropic.com/v1}"
+    LLM_MODEL="${LLM_MODEL:-claude-sonnet-4-6}"
+    EMBEDDING_API_BASE="${EMBEDDING_API_BASE:-https://api.openai.com/v1}"
+    EMBEDDING_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
+  fi
+
+}
+
+configure_embedding_key_default() {
+  if [[ "$LLM_PROVIDER" == "openai" ]]; then
+    EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-$LLM_API_KEY}"
+  fi
+}
+
+validate_llm_mode() {
+  case "$LLM_PROVIDER" in
+    ollama|openai|anthropic)
+      ;;
+    *)
+      log_error "不支持的 LLM_PROVIDER: $LLM_PROVIDER"
+      exit 1
+      ;;
+  esac
+
+  if [[ "$LLM_PROVIDER" == "ollama" && "$WITH_OLLAMA" != true && -z "$OLLAMA_URL_OVERRIDE" ]]; then
+    log_error "Ollama 模式需要使用 --with-ollama 部署集群内 Ollama，或使用 --ollama-url 指定外部 Ollama 地址。"
+    exit 1
+  fi
+
+  if [[ "$LLM_PROVIDER" != "ollama" ]]; then
+    if [[ -z "$LLM_API_BASE" || -z "$LLM_MODEL" ]]; then
+      log_error "云端 API 模式需要 LLM API Base 和模型名称。"
+      exit 1
+    fi
+    if [[ -z "$EMBEDDING_API_BASE" || -z "$EMBEDDING_MODEL" ]]; then
+      log_error "云端 API 模式需要 Embedding API Base 和模型名称。"
+      exit 1
+    fi
+  fi
+}
+
+choose_llm_mode() {
+  log_step "步骤 0.5/7：选择 LLM 模式"
+
+  if [[ "$LLM_MODE_EXPLICIT" == true ]]; then
+    if [[ -z "$LLM_PROVIDER" ]]; then
+      LLM_PROVIDER="openai"
+    fi
+    if [[ "$LLM_PROVIDER" == "ollama" ]]; then
+      configure_ollama_mode
+    else
+      configure_api_defaults
+      if [[ -t 0 ]]; then
+        LLM_API_BASE="$(prompt_with_default "  LLM API Base" "$LLM_API_BASE")"
+        LLM_MODEL="$(prompt_with_default "  LLM 模型名称" "$LLM_MODEL")"
+        if [[ -z "$LLM_API_KEY" ]]; then
+          LLM_API_KEY="$(prompt_secret "  LLM API Key: ")"
+        fi
+        EMBEDDING_API_BASE="$(prompt_with_default "  Embedding API Base" "$EMBEDDING_API_BASE")"
+        EMBEDDING_MODEL="$(prompt_with_default "  Embedding 模型名称" "$EMBEDDING_MODEL")"
+        if [[ -z "$EMBEDDING_API_KEY" ]]; then
+          if [[ "$LLM_PROVIDER" == "openai" ]]; then
+            EMBEDDING_API_KEY="$(prompt_secret "  Embedding API Key（留空则复用 LLM API Key）: ")"
+          else
+            EMBEDDING_API_KEY="$(prompt_secret "  Embedding API Key: ")"
+          fi
+        fi
+        configure_api_defaults
+        configure_embedding_key_default
+      elif [[ -z "$LLM_API_KEY" ]]; then
+        log_warn "未提供 LLM API Key，将以无认证模式运行。"
+      fi
+      configure_embedding_key_default
+    fi
+    validate_llm_mode
+    log_info "LLM 模式: $LLM_PROVIDER"
+    echo ""
+    return
+  fi
+
+  if [[ ! -t 0 ]]; then
+    if [[ "$SKIP_OLLAMA_REQUESTED" == true ]]; then
+      log_error "非交互式使用 --no-ollama 时，请同时提供 --llm-provider openai|anthropic 以及 API 参数。"
+      exit 1
+    fi
+    log_warn "当前不是交互式终端，默认使用集群内 Ollama。"
+    WITH_OLLAMA=true
+    configure_ollama_mode
+    echo ""
+    return
+  fi
+
+  local default_choice="1"
+  echo "  请选择 RAG 后端使用的 LLM 模式:"
+  if [[ "$SKIP_OLLAMA_REQUESTED" == true ]]; then
+    default_choice="3"
+    echo "    --no-ollama 已启用，本次不会部署集群内 Ollama。"
+  else
+    echo "    [1] 集群内 Ollama（默认，无需 API Key）"
+    echo "    [2] 外部 Ollama（输入已有 Ollama URL）"
+  fi
+  echo "    [3] OpenAI 兼容 API（输入 Base URL / Model / API Key）"
+  echo "    [4] Anthropic Claude（输入 Base URL / Model / API Key，并配置 Embedding API）"
+  echo ""
+
+  local mode_choice
+  read -r -p "  请选择 [1-4] (默认 ${default_choice}): " mode_choice
+  mode_choice="${mode_choice:-$default_choice}"
+
+  case "$mode_choice" in
+    1)
+      if [[ "$SKIP_OLLAMA_REQUESTED" == true ]]; then
+        log_error "--no-ollama 已启用，不能选择集群内 Ollama。"
+        exit 1
+      fi
+      WITH_OLLAMA=true
+      configure_ollama_mode
+      log_info "模式: 集群内 Ollama (${OLLAMA_MODEL_DEFAULT})"
+      ;;
+    2)
+      if [[ "$SKIP_OLLAMA_REQUESTED" == true ]]; then
+        log_error "--no-ollama 已启用，不能选择 Ollama 模式。"
+        exit 1
+      fi
+      WITH_OLLAMA=false
+      configure_ollama_mode
+      OLLAMA_URL_OVERRIDE="$(prompt_with_default "  Ollama URL" "http://192.168.1.100:11434")"
+      log_info "模式: 外部 Ollama (${OLLAMA_URL_OVERRIDE})"
+      ;;
+    3)
+      WITH_OLLAMA=false
+      LLM_PROVIDER="openai"
+      LLM_API_BASE="$(prompt_with_default "  LLM API Base" "https://api.openai.com/v1")"
+      LLM_MODEL="$(prompt_with_default "  LLM 模型名称" "gpt-4o")"
+      LLM_API_KEY="$(prompt_secret "  LLM API Key: ")"
+      EMBEDDING_API_BASE="$(prompt_with_default "  Embedding API Base" "$LLM_API_BASE")"
+      EMBEDDING_MODEL="$(prompt_with_default "  Embedding 模型名称" "text-embedding-3-small")"
+      EMBEDDING_API_KEY="$(prompt_secret "  Embedding API Key（留空则复用 LLM API Key）: ")"
+      configure_api_defaults
+      configure_embedding_key_default
+      log_info "模式: OpenAI 兼容 API (${LLM_MODEL} @ ${LLM_API_BASE})"
+      ;;
+    4)
+      WITH_OLLAMA=false
+      LLM_PROVIDER="anthropic"
+      LLM_API_BASE="$(prompt_with_default "  Anthropic API Base" "https://api.anthropic.com/v1")"
+      LLM_MODEL="$(prompt_with_default "  Claude 模型名称" "claude-sonnet-4-6")"
+      LLM_API_KEY="$(prompt_secret "  Anthropic API Key: ")"
+      EMBEDDING_API_BASE="$(prompt_with_default "  Embedding API Base" "https://api.openai.com/v1")"
+      EMBEDDING_MODEL="$(prompt_with_default "  Embedding 模型名称" "text-embedding-3-small")"
+      EMBEDDING_API_KEY="$(prompt_secret "  Embedding API Key: ")"
+      configure_api_defaults
+      configure_embedding_key_default
+      log_info "模式: Anthropic (${LLM_MODEL} @ ${LLM_API_BASE})"
+      ;;
+    *)
+      log_error "无效选择: $mode_choice"
+      exit 1
+      ;;
+  esac
+
+  validate_llm_mode
+
+  echo ""
 }
 
 # ---- 步骤 0：前置条件检查 ----
@@ -228,26 +522,6 @@ deploy_milvus() {
 create_app_config() {
   log_step "步骤 4/7：创建应用 ConfigMap 和 Secret"
 
-  # 检查 secret 中的 API Key 是否已配置
-  SECRET_FILE="${SCRIPT_DIR}/apps/rag-app/backend-secret.yaml"
-
-  if grep -q "your-llm-api-key-here" "$SECRET_FILE"; then
-    log_warn "=============================================="
-    log_warn "  检测到 API Key 未配置！"
-    log_warn "  当前 LLM_PROVIDER 默认为 'ollama'（本地模式）"
-    log_warn "  如需使用云端 LLM（OpenAI/Anthropic），请："
-    log_warn "  1. 编辑 apps/rag-app/backend-secret.yaml"
-    log_warn "  2. 填入你的 API Key"
-    log_warn "  3. 编辑 apps/rag-app/backend-config.yaml"
-    log_warn "     修改 LLM_PROVIDER 为 'openai' 或 'anthropic'"
-    log_warn "  4. 重新运行 kubectl apply -f apps/rag-app/backend-secret.yaml"
-    log_warn "  5. 重启后端: kubectl rollout restart deployment/rag-backend -n rag-app"
-    log_warn "=============================================="
-  fi
-
-  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend-config.yaml"
-  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend-secret.yaml"
-
   if compgen -G "${SCRIPT_DIR}/knowledge-base/*.md" > /dev/null; then
     kubectl create configmap rag-knowledge-base \
       -n "$APP_NAMESPACE" \
@@ -258,41 +532,46 @@ create_app_config() {
     log_warn "未找到 knowledge-base/*.md，跳过知识库 ConfigMap"
   fi
 
+  local ollama_url=""
+  local ollama_model=""
+  local ollama_embedding_model=""
+
   if [[ "$WITH_OLLAMA" == true ]]; then
     log_info "配置后端使用集群内 Ollama: $OLLAMA_SERVICE_URL"
-    kubectl create configmap rag-backend-config \
-      -n "$APP_NAMESPACE" \
-      --from-literal=LLM_PROVIDER="ollama" \
-      --from-literal=OLLAMA_URL="$OLLAMA_SERVICE_URL" \
-      --from-literal=OLLAMA_MODEL="$OLLAMA_MODEL_DEFAULT" \
-      --from-literal=OLLAMA_EMBEDDING_MODEL="$OLLAMA_EMBEDDING_MODEL_DEFAULT" \
-      --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
-      --from-literal=LLM_API_BASE="" \
-      --from-literal=LLM_MODEL="" \
-      --from-literal=EMBEDDING_API_BASE="" \
-      --from-literal=EMBEDDING_MODEL="" \
-      --from-literal=RETRIEVAL_TOP_K="5" \
-      --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
-      --dry-run=client -o yaml | kubectl apply -f -
+    ollama_url="$OLLAMA_SERVICE_URL"
+    ollama_model="$OLLAMA_MODEL_DEFAULT"
+    ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
   elif [[ -n "$OLLAMA_URL_OVERRIDE" ]]; then
     log_info "配置后端使用外部 Ollama: $OLLAMA_URL_OVERRIDE"
-    kubectl create configmap rag-backend-config \
-      -n "$APP_NAMESPACE" \
-      --from-literal=LLM_PROVIDER="ollama" \
-      --from-literal=OLLAMA_URL="$OLLAMA_URL_OVERRIDE" \
-      --from-literal=OLLAMA_MODEL="$OLLAMA_MODEL_DEFAULT" \
-      --from-literal=OLLAMA_EMBEDDING_MODEL="$OLLAMA_EMBEDDING_MODEL_DEFAULT" \
-      --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
-      --from-literal=LLM_API_BASE="" \
-      --from-literal=LLM_MODEL="" \
-      --from-literal=EMBEDDING_API_BASE="" \
-      --from-literal=EMBEDDING_MODEL="" \
-      --from-literal=RETRIEVAL_TOP_K="5" \
-      --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
-      --dry-run=client -o yaml | kubectl apply -f -
+    ollama_url="$OLLAMA_URL_OVERRIDE"
+    ollama_model="$OLLAMA_MODEL_DEFAULT"
+    ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
+  elif [[ "$LLM_PROVIDER" == "ollama" ]]; then
+    log_warn "未部署 Ollama；请确保 backend-config.yaml/backend-secret.yaml 已配置可用的 Ollama。"
   else
-    log_warn "未部署 Ollama；请确保 backend-config.yaml/backend-secret.yaml 已配置可用的云端 LLM 和 Embedding。"
+    log_info "配置后端使用云端 API: ${LLM_PROVIDER} (${LLM_MODEL} @ ${LLM_API_BASE})"
   fi
+
+  kubectl create configmap rag-backend-config \
+    -n "$APP_NAMESPACE" \
+    --from-literal=LLM_PROVIDER="$LLM_PROVIDER" \
+    --from-literal=OLLAMA_URL="$ollama_url" \
+    --from-literal=OLLAMA_MODEL="$ollama_model" \
+    --from-literal=OLLAMA_EMBEDDING_MODEL="$ollama_embedding_model" \
+    --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
+    --from-literal=LLM_API_BASE="$LLM_API_BASE" \
+    --from-literal=LLM_MODEL="$LLM_MODEL" \
+    --from-literal=EMBEDDING_API_BASE="$EMBEDDING_API_BASE" \
+    --from-literal=EMBEDDING_MODEL="$EMBEDDING_MODEL" \
+    --from-literal=RETRIEVAL_TOP_K="5" \
+    --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  kubectl create secret generic rag-backend-secret \
+    -n "$APP_NAMESPACE" \
+    --from-literal=LLM_API_KEY="$LLM_API_KEY" \
+    --from-literal=EMBEDDING_API_KEY="$EMBEDDING_API_KEY" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
   log_info "✓ ConfigMap 和 Secret 已创建"
   echo ""
@@ -479,6 +758,7 @@ main() {
   echo ""
 
   check_prerequisites
+  choose_llm_mode
   prepare_storage
   create_namespaces
   deploy_milvus

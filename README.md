@@ -106,13 +106,15 @@ rag-agent-gitops/
 # 1. 克隆仓库
 git clone <your-repo-url> && cd rag-agent-gitops
 
-# 2. （重要）配置 LLM 提供商
-# 编辑 apps/rag-app/backend-secret.yaml，填入你的 API Key
-# 编辑 apps/rag-app/backend-config.yaml，选择 LLM 提供商
-
-# 3. 一键部署
+# 2. 一键部署
 chmod +x deploy.sh
 ./deploy.sh
+
+# 脚本会交互式选择 LLM 模式：
+# [1] 集群内 Ollama
+# [2] 外部 Ollama
+# [3] OpenAI 兼容 API
+# [4] Anthropic Claude
 
 # 显式使用集群内 Ollama（默认行为）
 ./deploy.sh --with-ollama
@@ -120,8 +122,18 @@ chmod +x deploy.sh
 # 或使用外部 Ollama
 ./deploy.sh --ollama-url http://192.168.1.100:11434
 
-# 或不部署 Ollama，使用已在 ConfigMap/Secret 中配置好的云端 LLM
-./deploy.sh --no-ollama
+# 或直接使用 OpenAI 兼容 API（未提供的值会在交互式终端里继续提示）
+./deploy.sh --llm-provider openai
+
+# 非交互式部署可直接传入完整 API 参数
+./deploy.sh \
+  --llm-provider openai \
+  --llm-api-base https://api.openai.com/v1 \
+  --llm-model gpt-4o \
+  --llm-api-key "$LLM_API_KEY" \
+  --embedding-api-base https://api.openai.com/v1 \
+  --embedding-model text-embedding-3-small \
+  --embedding-api-key "$EMBEDDING_API_KEY"
 ```
 
 部署脚本会自动完成：
@@ -130,8 +142,8 @@ chmod +x deploy.sh
 3. ✅ 创建命名空间（`milvus` 和 `rag-app`）
 4. ✅ 部署 Milvus 独立版（通过 Helm）
 5. ✅ 创建 Milvus PV 资源
-6. ✅ 创建应用 ConfigMap 和 Secret
-7. ✅ 默认部署集群内 Ollama，或按参数使用外部/云端 LLM
+6. ✅ 交互式选择 LLM 模式并生成 ConfigMap/Secret
+7. ✅ 默认部署集群内 Ollama，或按参数使用外部 Ollama/云端 API
 8. ✅ 部署 RAG 后端和前端
 9. ✅ 等待所有 Pod 就绪
 10. ✅ 在 Ollama API 和嵌入模型可用时自动导入知识库
@@ -180,13 +192,13 @@ curl -X POST http://localhost:8080/api/knowledge/import-all
 
 ## LLM 提供商配置
 
-本项目支持**多种 LLM 后端**，通过 ConfigMap 和 Secret 灵活切换。
+本项目支持**多种 LLM 后端**。推荐通过 `deploy.sh` 交互式选择模式并填写 Base URL、模型和 API Key；脚本会动态生成 `rag-backend-config` ConfigMap 和 `rag-backend-secret` Secret，无需手动编辑 YAML。
 
 ### 方式一：Ollama（本地部署，无需 API Key）
 
 **适用场景：** 离线环境、数据隐私敏感、无 API 调用费用。
 
-`deploy.sh` 默认会在 `rag-app` 命名空间内部署 Ollama，并自动把后端 `OLLAMA_URL` 设置为 `http://ollama.rag-app.svc.cluster.local:11434`。如果你已有外部 Ollama，可以使用 `deploy.sh --ollama-url http://<host>:11434`；如果使用 OpenAI/Anthropic 等云端 LLM，可以使用 `deploy.sh --no-ollama`。
+`deploy.sh` 默认会在 `rag-app` 命名空间内部署 Ollama，并自动把后端 `OLLAMA_URL` 设置为 `http://ollama.rag-app.svc.cluster.local:11434`。如果你已有外部 Ollama，可以使用 `deploy.sh --ollama-url http://<host>:11434`；如果使用 OpenAI/Anthropic 等云端 LLM，可以在交互式菜单中选择 API 模式，或使用 `deploy.sh --llm-provider openai` / `deploy.sh --llm-provider anthropic`。
 
 Ollama 镜像不预装模型。首次部署后请拉取所需模型：
 
@@ -209,35 +221,27 @@ OLLAMA_EMBEDDING_MODEL: "nomic-embed-text"  # 嵌入模型
 
 支持所有 OpenAI 兼容接口的服务商（OpenAI / DeepSeek / 通义千问 / Moonshot / 硅基流动 等）。
 
-```yaml
-# backend-config.yaml (ConfigMap)
-LLM_PROVIDER: "openai"
-LLM_API_BASE: "https://api.openai.com/v1"       # 或其他兼容地址
-LLM_MODEL: "gpt-4o"                              # 生成模型
-EMBEDDING_API_BASE: "https://api.openai.com/v1"  # 嵌入 API 地址
-EMBEDDING_MODEL: "text-embedding-3-small"        # 嵌入模型
+```bash
+./deploy.sh --llm-provider openai
 ```
 
-```yaml
-# backend-secret.yaml (Secret) — 填入实际 Key
-LLM_API_KEY: "sk-your-openai-api-key"
-```
+脚本会提示输入：
+
+- LLM API Base，如 `https://api.openai.com/v1`
+- LLM 模型，如 `gpt-4o`
+- LLM API Key
+- Embedding API Base 和模型，如 `text-embedding-3-small`
+- Embedding API Key（留空则复用 LLM API Key）
 
 ### 方式三：Anthropic Claude
 
 **适用场景：** 使用 Claude 系列模型。
 
-```yaml
-# backend-config.yaml (ConfigMap)
-LLM_PROVIDER: "anthropic"
-LLM_API_BASE: "https://api.anthropic.com/v1"
-LLM_MODEL: "claude-sonnet-4-6"
+```bash
+./deploy.sh --llm-provider anthropic
 ```
 
-```yaml
-# backend-secret.yaml (Secret) — 填入实际 Key
-LLM_API_KEY: "sk-ant-your-anthropic-api-key"
-```
+脚本会提示输入 Claude API Base、模型、API Key，并要求配置独立 Embedding API。
 
 ### 环境变量完整参考
 
@@ -339,15 +343,27 @@ kubectl apply -f apps/milvus/pv.yaml
 ### 4. 配置 LLM
 
 ```bash
-# 编辑 Secret 填入 API Key
-vim apps/rag-app/backend-secret.yaml
+# OpenAI 兼容 API 示例。也可以按需把 LLM_PROVIDER 改为 anthropic。
+kubectl create configmap rag-backend-config \
+  -n rag-app \
+  --from-literal=LLM_PROVIDER=openai \
+  --from-literal=OLLAMA_URL="" \
+  --from-literal=OLLAMA_MODEL="" \
+  --from-literal=OLLAMA_EMBEDDING_MODEL="" \
+  --from-literal=MILVUS_ADDRESS=milvus.milvus.svc.cluster.local:19530 \
+  --from-literal=LLM_API_BASE=https://api.openai.com/v1 \
+  --from-literal=LLM_MODEL=gpt-4o \
+  --from-literal=EMBEDDING_API_BASE=https://api.openai.com/v1 \
+  --from-literal=EMBEDDING_MODEL=text-embedding-3-small \
+  --from-literal=RETRIEVAL_TOP_K=5 \
+  --from-literal=RETRIEVAL_SCORE_THRESHOLD=0.5 \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-# 编辑 ConfigMap 选择 LLM 提供商
-vim apps/rag-app/backend-config.yaml
-
-# 应用配置
-kubectl apply -f apps/rag-app/backend-secret.yaml
-kubectl apply -f apps/rag-app/backend-config.yaml
+kubectl create secret generic rag-backend-secret \
+  -n rag-app \
+  --from-literal=LLM_API_KEY="$LLM_API_KEY" \
+  --from-literal=EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-$LLM_API_KEY}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ### 5. 部署应用
@@ -445,7 +461,15 @@ kubectl exec -it deployment/rag-backend -n rag-app -- curl -s milvus.milvus.svc.
 
 ### Q: 如何切换 LLM 提供商？
 
-修改 ConfigMap 和 Secret 后，重启后端 Pod：
+推荐重新运行部署脚本并选择新的 LLM 模式：
+
+```bash
+./deploy.sh --llm-provider openai
+# 或
+./deploy.sh --llm-provider anthropic
+```
+
+如果你手动更新了 `rag-backend-config` 或 `rag-backend-secret`，需要重启后端 Pod：
 
 ```bash
 kubectl rollout restart deployment/rag-backend -n rag-app
