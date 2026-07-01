@@ -265,6 +265,44 @@ validate_llm_mode() {
   fi
 }
 
+ensure_ingress_controller() {
+  local ingress_classes="$1"
+  local current_context
+
+  if [[ -n "$ingress_classes" ]]; then
+    log_info "✓ 检测到 IngressClass: $ingress_classes"
+    return
+  fi
+
+  current_context="$(kubectl config current-context 2>/dev/null || true)"
+  if [[ "$current_context" == minikube* ]]; then
+    if ! command -v minikube &>/dev/null; then
+      log_warn "当前是 minikube 集群，但未找到 minikube 命令；请手动执行：minikube addons enable ingress"
+      return
+    fi
+
+    log_warn "未检测到 IngressClass，正在为 minikube 启用 ingress addon..."
+    if minikube addons enable ingress; then
+      kubectl wait --for=condition=available deployment/ingress-nginx-controller \
+        -n ingress-nginx \
+        --timeout=180s 2>/dev/null || {
+        log_warn "ingress-nginx-controller 尚未就绪，请稍后检查：kubectl get pods -n ingress-nginx"
+      }
+      ingress_classes=$(kubectl get ingressclass -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || echo "")
+      if [[ -n "$ingress_classes" ]]; then
+        log_info "✓ 检测到 IngressClass: $ingress_classes"
+      else
+        log_warn "minikube ingress addon 已启用，但暂未检测到 IngressClass。"
+      fi
+    else
+      log_warn "自动启用 minikube ingress addon 失败，请手动执行：minikube addons enable ingress"
+    fi
+    return
+  fi
+
+  log_warn "未检测到 IngressClass。Ingress 清单会被应用，但需要先安装 nginx-ingress、Traefik 等 Controller 才能访问域名入口。"
+}
+
 choose_llm_mode() {
   log_step "步骤 0.5/7：选择 LLM 模式"
 
@@ -433,11 +471,7 @@ check_prerequisites() {
 
   if kubectl get ingressclass &>/dev/null; then
     INGRESS_CLASSES=$(kubectl get ingressclass -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || echo "")
-    if [[ -n "$INGRESS_CLASSES" ]]; then
-      log_info "✓ 检测到 IngressClass: $INGRESS_CLASSES"
-    else
-      log_warn "未检测到 IngressClass。Ingress 清单会被应用，但需要先安装 nginx-ingress、Traefik 等 Controller 才能访问域名入口。"
-    fi
+    ensure_ingress_controller "$INGRESS_CLASSES"
   else
     log_warn "当前集群不支持或无法查询 IngressClass，请确认已安装 Ingress Controller。"
   fi

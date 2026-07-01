@@ -81,7 +81,7 @@ rag-agent-gitops/
 - [ ] 集群已安装默认 StorageClass，或已准备好 hostPath 目录（见下文）
 - [ ] 集群有足够的可用资源（CPU/内存/磁盘）
 - [ ] 如果使用 NodePort 暴露服务，确保节点 IP 可从浏览器访问
-- [ ] 如果使用 Ingress 暴露服务，确保已安装 Ingress Controller（如 nginx-ingress、Traefik）
+- [ ] 如果使用 Ingress 暴露服务，确保已安装 Ingress Controller（minikube 会由部署脚本自动启用 ingress addon）
 
 ### 存储说明
 
@@ -395,6 +395,8 @@ kubectl get ingress -n rag-app
 ### Ingress 和 TLS
 
 仓库提供 `apps/rag-app/ingress.yaml`，默认使用 `rag.127-0-0-1.sslip.io` 作为开发域名并转发到 `rag-frontend-svc:3000`。生产环境请将 host 改为真实域名，并配合 cert-manager 创建 TLS 证书 Secret。
+
+在 minikube 中运行 `deploy.sh` 时，如果脚本未检测到 IngressClass，会自动执行 `minikube addons enable ingress` 并等待 `ingress-nginx-controller` 就绪。其他 Kubernetes 集群仍需要提前安装 nginx-ingress、Traefik 等 Ingress Controller。
 
 ---
 
