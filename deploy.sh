@@ -58,9 +58,13 @@ MILVUS_HELM_VALUES=(
   --set pulsar.enabled=false
   --set kafka.enabled=false
   --set woodpecker.enabled=false
+  --set standalone.messageQueue=rocksmq
   --set minio.mode=standalone
   --set minio.replicas=1
   --set minio.persistence.size=20Gi
+  --set minio.securityContext.runAsUser=0
+  --set minio.securityContext.runAsGroup=0
+  --set minio.securityContext.fsGroup=0
   --set etcd.replicaCount=1
   --set standalone.persistence.persistentVolumeClaim.size=20Gi
 )
@@ -316,8 +320,75 @@ ensure_ingress_controller() {
   log_warn "未检测到 IngressClass。Ingress 清单会被应用，但需要先安装 nginx-ingress、Traefik 等 Controller 才能访问域名入口。"
 }
 
+is_minikube_context() {
+  local current_context
+
+  current_context="$(kubectl config current-context 2>/dev/null || true)"
+  [[ "$current_context" == minikube* ]]
+}
+
+update_helm_repo() {
+  local repo_name="$1"
+  local chart_ref="$2"
+  local attempt
+
+  for attempt in 1 2 3; do
+    if helm repo update "$repo_name"; then
+      return
+    fi
+    log_warn "Helm 仓库更新失败（第 ${attempt}/3 次），稍后重试..."
+    sleep "$((attempt * 3))"
+  done
+
+  if helm show chart "$chart_ref" &>/dev/null; then
+    log_warn "Helm 仓库更新失败，但本地已有可用 chart 缓存，继续部署。"
+    return
+  fi
+
+  log_error "无法更新 Helm 仓库，且本地没有可用 chart 缓存：$chart_ref"
+  exit 1
+}
+
+reset_failed_milvus_on_minikube() {
+  if ! is_minikube_context; then
+    return 1
+  fi
+
+  log_warn "检测到 minikube 上的 Milvus release 处于失败/挂起状态，将清理后重新安装。"
+  log_warn "仅 minikube 会自动执行此清理；其他 Kubernetes 集群不会自动删除已有数据。"
+
+  if kubectl get namespace "$MILVUS_NAMESPACE" -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null | grep -q .; then
+    log_warn "Milvus 命名空间正在删除中，等待删除完成..."
+    if ! kubectl wait --for=delete namespace/"$MILVUS_NAMESPACE" --timeout=180s 2>/dev/null; then
+      log_error "Milvus 命名空间仍处于 Terminating。请先修复本地 minikube 残留资源后再重试。"
+      return 1
+    fi
+    kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
+    return 0
+  fi
+
+  helm uninstall "$MILVUS_HELM_RELEASE" -n "$MILVUS_NAMESPACE" --ignore-not-found || true
+  kubectl delete all,job,pvc,configmap,secret -n "$MILVUS_NAMESPACE" \
+    -l app.kubernetes.io/instance="$MILVUS_HELM_RELEASE" \
+    --ignore-not-found --wait=true --timeout=180s || true
+  kubectl delete pvc -n "$MILVUS_NAMESPACE" --all --ignore-not-found --wait=true --timeout=180s || true
+  kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
+  return 0
+}
+
 choose_llm_mode() {
-  log_step "步骤 0.5/7：选择 LLM 模式"
+  # 检测是否已有部署配置 → 跳过 LLM 选择，复用已有配置
+  if kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" &>/dev/null 2>&1 && \
+     kubectl get secret rag-backend-secret -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
+    log_info "检测到已有部署配置（ConfigMap + Secret），跳过 LLM 模式选择。"
+    log_info "如需重新配置，请先执行:"
+    log_info "  kubectl delete configmap rag-backend-config -n ${APP_NAMESPACE}"
+    log_info "  kubectl delete secret rag-backend-secret -n ${APP_NAMESPACE}"
+    echo ""
+    return
+  fi
+
+  log_step "步骤 2/10：选择 LLM 模式"
 
   if [[ "$LLM_MODE_EXPLICIT" == true ]]; then
     if [[ -z "$LLM_PROVIDER" ]]; then
@@ -441,9 +512,9 @@ choose_llm_mode() {
   echo ""
 }
 
-# ---- 步骤 0：前置条件检查 ----
+# ---- 步骤 1：前置条件检查 ----
 check_prerequisites() {
-  log_step "步骤 0/7：检查前置条件"
+  log_step "步骤 1/10：检查前置条件"
 
   # 检查 kubectl
   if ! command -v kubectl &>/dev/null; then
@@ -492,9 +563,9 @@ check_prerequisites() {
   echo ""
 }
 
-# ---- 步骤 1：准备存储 ----
+# ---- 步骤 3：准备存储 ----
 prepare_storage() {
-  log_step "步骤 1/7：检查存储配置"
+  log_step "步骤 3/10：检查存储配置"
 
   # 检查是否有默认 StorageClass
   DEFAULT_SC=$(kubectl get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null || echo "")
@@ -518,9 +589,9 @@ prepare_storage() {
   echo ""
 }
 
-# ---- 步骤 2：创建命名空间 ----
+# ---- 步骤 4：创建命名空间 ----
 create_namespaces() {
-  log_step "步骤 2/7：创建命名空间"
+  log_step "步骤 4/10：创建命名空间"
 
   kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/namespace.yaml"
@@ -529,9 +600,11 @@ create_namespaces() {
   echo ""
 }
 
-# ---- 步骤 3：部署 Milvus ----
+# ---- 步骤 5：部署 Milvus ----
 deploy_milvus() {
-  log_step "步骤 3/7：部署 Milvus 向量数据库（通过 Helm）"
+  log_step "步骤 5/10：部署 Milvus 向量数据库（通过 Helm）"
+  local release_exists=false
+  local release_status=""
 
   # 添加 Helm 仓库
   if ! helm repo list 2>/dev/null | grep -q "milvus"; then
@@ -539,10 +612,24 @@ deploy_milvus() {
     helm repo add milvus "$MILVUS_HELM_REPO"
   fi
   log_info "更新 Helm 仓库..."
-  helm repo update milvus
+  update_helm_repo milvus milvus/milvus
 
   # 检查是否已安装
   if helm status "$MILVUS_HELM_RELEASE" -n "$MILVUS_NAMESPACE" &>/dev/null; then
+    release_exists=true
+    release_status=$(helm status "$MILVUS_HELM_RELEASE" -n "$MILVUS_NAMESPACE" 2>/dev/null | awk '/^STATUS:/ { status = $2 } END { print status }')
+  fi
+
+  if [[ "$release_exists" == true && "$release_status" =~ ^(failed|pending-) ]]; then
+    if reset_failed_milvus_on_minikube; then
+      release_exists=false
+    else
+      log_error "Milvus release 状态为 ${release_status}。请先手动检查或清理后再运行部署脚本。"
+      exit 1
+    fi
+  fi
+
+  if [[ "$release_exists" == true ]]; then
     log_warn "Milvus 已安装，执行更新..."
     helm upgrade "$MILVUS_HELM_RELEASE" milvus/milvus \
       --namespace "$MILVUS_NAMESPACE" \
@@ -563,9 +650,16 @@ deploy_milvus() {
   echo ""
 }
 
-# ---- 步骤 4：创建应用配置 ----
+# ---- 步骤 6：创建应用配置 ----
 create_app_config() {
-  log_step "步骤 4/7：创建应用 ConfigMap 和 Secret"
+  # 如果 choose_llm_mode 已跳过（配置已存在），此处也跳过
+  if kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
+    log_info "ConfigMap 已存在，跳过创建。如需更新请先删除旧配置再重试。"
+    echo ""
+    return
+  fi
+
+  log_step "步骤 6/10：创建应用 ConfigMap 和 Secret"
 
   if compgen -G "${SCRIPT_DIR}/knowledge-base/*.md" > /dev/null; then
     kubectl create configmap rag-knowledge-base \
@@ -622,13 +716,20 @@ create_app_config() {
   echo ""
 }
 
-# ---- 步骤 4.5：可选部署 Ollama ----
+# ---- 步骤 7：部署 Ollama（可选） ----
 deploy_ollama() {
   if [[ "$WITH_OLLAMA" != true ]]; then
     return
   fi
 
-  log_step "步骤 4.5/7：部署 Ollama（可选）"
+  # 检测是否已部署
+  if kubectl get deployment ollama -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
+    log_info "Ollama 已部署，跳过。"
+    echo ""
+    return
+  fi
+
+  log_step "步骤 7/10：部署 Ollama（可选）"
 
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/ollama.yaml"
   log_info "等待 Ollama Pod 就绪..."
@@ -651,6 +752,11 @@ check_ollama_ready_for_import() {
   fi
 
   log_info "检查 Ollama API 和 Embedding 模型是否可用..."
+  kubectl delete pod ollama-healthcheck -n "$APP_NAMESPACE" \
+    --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || {
+      log_warn "上一次 Ollama 健康检查 Pod 仍在删除中，跳过自动知识库导入。"
+      return 1
+    }
   kubectl run ollama-healthcheck \
     -n "$APP_NAMESPACE" \
     --rm -i --restart=Never \
@@ -663,9 +769,9 @@ check_ollama_ready_for_import() {
     }
 }
 
-# ---- 步骤 5：部署 RAG 应用 ----
+# ---- 步骤 8：部署 RAG 应用 ----
 deploy_rag_app() {
-  log_step "步骤 5/7：部署 RAG 后端和前端"
+  log_step "步骤 8/10：部署 RAG 后端和前端"
 
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/frontend.yaml"
@@ -676,7 +782,14 @@ deploy_rag_app() {
 }
 
 run_knowledge_import() {
-  log_step "步骤 6.5/7：导入知识库"
+  # 检测是否已导入
+  if kubectl get job rag-knowledge-import -n "$APP_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null | grep -q True; then
+    log_info "知识库已导入，跳过。"
+    echo ""
+    return
+  fi
+
+  log_step "步骤 10/10：导入知识库"
 
   if ! check_ollama_ready_for_import; then
     echo ""
@@ -695,9 +808,9 @@ run_knowledge_import() {
   echo ""
 }
 
-# ---- 步骤 6：等待就绪 ----
+# ---- 步骤 9：等待就绪 ----
 wait_for_ready() {
-  log_step "步骤 6/7：等待所有 Pod 就绪"
+  log_step "步骤 9/10：等待所有 Pod 就绪"
 
   log_info "等待 Milvus Pod 就绪（可能需要几分钟）..."
   kubectl wait --for=condition=ready pod \
@@ -729,9 +842,9 @@ wait_for_ready() {
   echo ""
 }
 
-# ---- 步骤 7：输出访问信息 ----
+# ---- 输出访问信息 ----
 print_access_info() {
-  log_step "步骤 7/7：部署完成！"
+  log_step "部署完成！"
 
   # 获取节点 IP（优先使用外部 IP，其次是内部 IP）
   NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null)
