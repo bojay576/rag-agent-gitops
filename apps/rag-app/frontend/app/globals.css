@@ -142,3 +142,97 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- 文件上传 ---- */
+.upload-section {
+  margin-top: 24px;
+}
+
+.upload-heading {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  background: #e8f0e6;
+}
+
+.drop-hint {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.file-list {
+  margin-top: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  color: var(--muted);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.upload-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.file-count {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.import-btn {
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.import-btn:disabled {
+  cursor: wait;
+  background: var(--muted);
+}

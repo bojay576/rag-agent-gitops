@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from pathlib import Path
+import shutil
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from config import get_settings
@@ -68,3 +71,27 @@ async def import_all() -> dict[str, object]:
     )
     imported = await importer.import_all()
     return {"imported": imported}
+
+
+@app.post("/api/knowledge/upload")
+async def upload_file(file: UploadFile = File(...)) -> dict[str, object]:
+    """Upload a file to the knowledge base directory"""
+    settings = get_settings()
+    dest = Path(settings.knowledge_base_path) / file.filename
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"filename": file.filename, "status": "uploaded"}
+
+
+@app.get("/api/knowledge/files")
+async def list_files() -> dict[str, object]:
+    """List files in the knowledge base directory"""
+    settings = get_settings()
+    base = Path(settings.knowledge_base_path)
+    if not base.exists():
+        return {"files": []}
+    files = []
+    for p in sorted(base.iterdir()):
+        if p.is_file():
+            files.append({"name": p.name, "size": p.stat().st_size})
+    return {"files": files}

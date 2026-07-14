@@ -7,8 +7,14 @@
 ```
 ┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │   Browser    │────▶│  rag-frontend    │────▶│  rag-backend    │
-│  (NodePort)  │     │  (Node.js :3000) │     │  (Python :8080) │
-└──────────────┘     └──────────────────┘     └────────┬────────┘
+│  (NodePort)  │     │  (Node.js :3000) │ ──▶ │  (Python :8080) │
+│  (上传文件)  │     │                  │     └────────┬────────┘
+└──────────────┘     └──────────────────┘              │
+                                                  ┌────┴────┐
+                                                  │  PVC    │
+                                                  │ 知识库  │
+                                                  │ 文件存储 │
+                                                  └────┬────┘
                                                        │
                                           ┌────────────┼────────────┐
                                           │            │            │
@@ -139,9 +145,9 @@ chmod +x deploy.sh
 1. ✅ 检查前置条件（kubectl、helm、集群状态）
 2. ✅ 检查默认 StorageClass，必要时安装 local-path-provisioner
 3. ✅ 创建命名空间（`milvus` 和 `rag-app`）
-4. ✅ 以轻量 standalone 模式部署 Milvus（通过 Helm）
-5. ✅ 通过 PVC 动态申请 Milvus 存储
-6. ✅ 交互式选择 LLM 模式并生成 ConfigMap/Secret
+4. ✅ 交互式选择 LLM 模式并保存配置（下次重跑自动跳过）
+5. ✅ 以轻量 standalone 模式部署 Milvus（通过 Helm）
+6. ✅ 创建知识库 PVC（`rag-knowledge-pvc`），播种初始 `.md` 文件
 7. ✅ 默认部署集群内 Ollama，或按参数使用外部 Ollama/云端 API
 8. ✅ 部署 RAG 后端和前端
 9. ✅ 等待所有 Pod 就绪
@@ -262,36 +268,56 @@ OLLAMA_EMBEDDING_MODEL: "nomic-embed-text"  # 嵌入模型
 
 ## 知识库管理
 
-知识库文档存放在 `knowledge-base/` 目录下。系统支持 Markdown 格式的文档。
+知识库文档支持多种方式上传和导入。所有文件存储在共享 PVC `rag-knowledge-pvc` 中，挂载到后端 Pod 的 `/knowledge-base` 目录，支持读写。
 
-### 自动导入知识到 Milvus
+### 支持的文件格式
 
-`deploy.sh` 会从 `knowledge-base/*.md` 生成 `rag-knowledge-base` ConfigMap，挂载到后端的 `/knowledge-base`，并在后端就绪后创建 `rag-knowledge-import` Job 调用 `/api/knowledge/import-all`。如果使用默认 Ollama 模式，脚本会先检查 Ollama API 和 `nomic-embed-text` 是否可用；模型尚未拉取时会跳过自动导入并打印手动导入命令。
+| 格式 | 分块方式 | 说明 |
+|------|---------|------|
+| `.md` | 按 `##` 标题分块 | Markdown 文档，推荐 |
+| `.txt` | 按空行分块 | 纯文本文档 |
+| `.json` | 按顶级 key 分块 | JSON 对象或数组 |
 
-如果你更新了知识库文档，可以重新运行部署脚本，或手动重建 ConfigMap 并重跑 Job：
+### 方式一：前端网页上传（推荐）
+
+打开前端页面（`http://<node-ip>:<node-port>` 或 Ingress 地址），在左侧边栏的文件上传区域：
+
+1. **拖拽文件** 到虚线框，或 **点击选择文件**
+2. 上传成功后文件会出现在文件列表中
+3. 点击 **"导入到 Milvus"** 按钮将新文件向量化
+4. 向量化完成后即可在下方的聊天界面提问
+
+支持同时选择或拖拽多个文件。
+
+### 方式二：后端 API 上传
 
 ```bash
-kubectl create configmap rag-knowledge-base \
-  -n rag-app \
-  --from-file=knowledge-base \
-  --dry-run=client -o yaml | kubectl apply -f -
+# 上传文件
+curl -X POST http://<backend-ip>:8080/api/knowledge/upload \
+  -F "file=@/path/to/document.md"
 
-kubectl rollout restart deployment/rag-backend -n rag-app
-kubectl delete job rag-knowledge-import -n rag-app --ignore-not-found=true
-kubectl apply -f apps/rag-app/knowledge-import-job.yaml
-```
+# 查看知识库文件列表
+curl http://<backend-ip>:8080/api/knowledge/files
 
-### 手动导入知识到 Milvus
+# 批量导入所有文件到 Milvus
+curl -X POST http://<backend-ip>:8080/api/knowledge/import-all
 
-```bash
-# 方式一：通过后端 API 导入
+# 导入单个文件
 curl -X POST http://<backend-ip>:8080/api/knowledge/import \
   -H "Content-Type: application/json" \
   -d '{"path": "/knowledge-base/go-best-practices.md"}'
-
-# 方式二：批量导入目录
-curl -X POST http://<backend-ip>:8080/api/knowledge/import-all
 ```
+
+### 方式三：部署时自动导入
+
+`deploy.sh` 会从 `knowledge-base/*.md` 生成 ConfigMap，并播种到 PVC 中。如果使用默认 Ollama 模式，后端就绪后会自动调用 `/api/knowledge/import-all` 导入初始文件。
+
+### 知识库存储
+
+- K8s 部署使用 PVC `rag-knowledge-pvc`（动态申请 1Gi 存储），挂载到后端的 `/knowledge-base`
+- `knowledge-base/` 目录下的 `.md` 文件作为**初始数据**，部署时自动写入 PVC
+- Docker Compose 本地开发使用 `./knowledge-base:/knowledge-base:ro` 绑定挂载
+- **卸载时注意** PVC 中的文件不会随命名空间删除，需使用 `./uninstall.sh --clean-pvc` 彻底清理
 
 ### 编写知识文档建议
 
@@ -344,7 +370,31 @@ helm upgrade --install milvus milvus/milvus \
   --set standalone.persistence.persistentVolumeClaim.size=20Gi
 ```
 
-### 4. 配置 LLM
+### 4. 创建知识库 PVC
+
+```bash
+# 创建知识库 PVC（后端读写挂载，用于文件上传）
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rag-knowledge-pvc
+  namespace: rag-app
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+# 播种初始知识库文件
+kubectl create configmap rag-knowledge-base \
+  -n rag-app \
+  --from-file=knowledge-base \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 5. 配置 LLM
 
 ```bash
 # OpenAI 兼容 API 示例。也可以按需把 LLM_PROVIDER 改为 anthropic。
@@ -370,7 +420,7 @@ kubectl create secret generic rag-backend-secret \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 5. 部署应用
+### 6. 部署应用
 
 ```bash
 kubectl apply -f apps/rag-app/backend.yaml
@@ -378,7 +428,7 @@ kubectl apply -f apps/rag-app/frontend.yaml
 kubectl apply -f apps/rag-app/ingress.yaml
 ```
 
-### 6. 验证部署
+### 7. 验证部署
 
 ```bash
 # 查看 Pod 状态

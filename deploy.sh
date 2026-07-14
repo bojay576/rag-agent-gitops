@@ -929,18 +929,87 @@ deploy_milvus() {
   echo ""
 }
 
-# ---- 步骤 6：创建知识库 ConfigMap ----
-create_knowledge_base_config() {
-  log_step "步骤 6/9：创建知识库 ConfigMap"
+# ---- 步骤 6：创建知识库 PVC 并播种初始数据 ----
+create_knowledge_storage() {
+  log_step "步骤 6/9：创建知识库 PVC 并初始化数据"
 
+  # 检测 PVC 是否已存在
+  if kubectl get pvc rag-knowledge-pvc -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
+    log_info "✓ 知识库 PVC 已存在"
+    echo ""
+    return
+  fi
+
+  # 创建知识库 PVC（后端运行时挂载此 PVC 实现读写上传）
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rag-knowledge-pvc
+  namespace: rag-app
+  labels:
+    app: rag-agent
+    component: knowledge-base
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+  # 将初始知识库文件写入 PVC
   if compgen -G "${SCRIPT_DIR}/knowledge-base/*.md" > /dev/null; then
     kubectl create configmap rag-knowledge-base \
       -n "$APP_NAMESPACE" \
       --from-file="${SCRIPT_DIR}/knowledge-base" \
       --dry-run=client -o yaml | kubectl apply -f -
-    log_info "✓ 知识库 ConfigMap 已创建"
+
+    # 等待 PVC 绑定
+    log_info "等待 PVC 就绪..."
+    kubectl wait --for=condition=bound pvc/rag-knowledge-pvc -n "$APP_NAMESPACE" --timeout=60s 2>/dev/null || true
+
+    # 用临时 Pod 将初始知识库文件写入 PVC
+    log_info "将初始化知识库文件写入 PVC..."
+    kubectl delete pod rag-knowledge-init -n "$APP_NAMESPACE" --ignore-not-found --wait=true --timeout=10s 2>/dev/null || true
+
+    cat <<'PODEOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rag-knowledge-init
+  namespace: rag-app
+spec:
+  restartPolicy: Never
+  containers:
+  - name: init
+    image: alpine:3.20
+    command:
+    - sh
+    - -c
+    - cp -r /init-data/* /knowledge-base/ 2>/dev/null; echo "done"; ls -la /knowledge-base/
+    volumeMounts:
+    - name: data
+      mountPath: /knowledge-base
+    - name: init
+      mountPath: /init-data
+      readOnly: true
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: rag-knowledge-pvc
+  - name: init
+    configMap:
+      name: rag-knowledge-base
+PODEOF
+
+    # 等待 init Pod 完成
+    kubectl wait --for=condition=ready pod/rag-knowledge-init -n "$APP_NAMESPACE" --timeout=60s 2>/dev/null || sleep 10
+    kubectl logs rag-knowledge-init -n "$APP_NAMESPACE" --tail=5 2>/dev/null || true
+    kubectl delete pod rag-knowledge-init -n "$APP_NAMESPACE" --ignore-not-found --wait=true --timeout=30s 2>/dev/null || true
+
+    log_info "✓ 初始知识库文件已写入 PVC"
   else
-    log_warn "未找到 knowledge-base/*.md，跳过知识库 ConfigMap"
+    log_warn "未找到 knowledge-base/*.md，跳过初始数据"
   fi
 
   echo ""
@@ -1151,7 +1220,7 @@ main() {
   create_namespaces
   choose_llm_mode
   deploy_milvus
-  create_knowledge_base_config
+  create_knowledge_storage
   deploy_ollama
   deploy_rag_app
   wait_for_ready
