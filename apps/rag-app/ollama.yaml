@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: ollama
-        image: ollama/ollama:0.6.8
+        image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/ollama/ollama:0.9.6
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 11434
