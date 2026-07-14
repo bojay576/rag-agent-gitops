@@ -95,7 +95,11 @@ class KnowledgeImporter:
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            return [DocumentChunk(source=source, title=Path(source).name, content=text.strip())]
+            return [
+                DocumentChunk(
+                    source=source, title=Path(source).name, content=text.strip()
+                )
+            ]
 
         if isinstance(data, dict):
             for key, value in data.items():
@@ -109,10 +113,18 @@ class KnowledgeImporter:
                 content = str(item)
                 if content.strip():
                     chunks.append(
-                        DocumentChunk(source=source, title=f"{Path(source).name}[{i}]", content=content)
+                        DocumentChunk(
+                            source=source,
+                            title=f"{Path(source).name}[{i}]",
+                            content=content,
+                        )
                     )
         else:
-            chunks.append(DocumentChunk(source=source, title=Path(source).name, content=text.strip()))
+            chunks.append(
+                DocumentChunk(
+                    source=source, title=Path(source).name, content=text.strip()
+                )
+            )
 
         return chunks or [
             DocumentChunk(source=source, title=Path(source).name, content=text.strip())
