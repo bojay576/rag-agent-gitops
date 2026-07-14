@@ -358,29 +358,26 @@ update_helm_repo() {
   exit 1
 }
 
-reset_failed_milvus_on_minikube() {
-  if ! is_minikube_context; then
-    return 1
-  fi
-
-  log_warn "检测到 minikube 上的 Milvus release 处于失败/挂起状态，将清理后重新安装。"
-  log_warn "仅 minikube 会自动执行此清理；其他 Kubernetes 集群不会自动删除已有数据。"
+reset_failed_milvus_release() {
+  log_warn "检测到 Milvus release 处于失败/挂起状态，将清理后重新安装。"
 
   if kubectl get namespace "$MILVUS_NAMESPACE" -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null | grep -q .; then
     log_warn "Milvus 命名空间正在删除中，等待删除完成..."
     if ! kubectl wait --for=delete namespace/"$MILVUS_NAMESPACE" --timeout=180s 2>/dev/null; then
-      log_error "Milvus 命名空间仍处于 Terminating。请先修复本地 minikube 残留资源后再重试。"
+      log_error "Milvus 命名空间仍处于 Terminating。"
+      log_error "请手动执行: kubectl delete namespace ${MILVUS_NAMESPACE} --force --grace-period=0"
       return 1
     fi
-    kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
-    return 0
   fi
 
+  log_info "清理 Milvus 残留资源..."
   helm uninstall "$MILVUS_HELM_RELEASE" -n "$MILVUS_NAMESPACE" --ignore-not-found || true
   kubectl delete all,job,pvc,configmap,secret -n "$MILVUS_NAMESPACE" \
     -l app.kubernetes.io/instance="$MILVUS_HELM_RELEASE" \
     --ignore-not-found --wait=true --timeout=180s || true
   kubectl delete pvc -n "$MILVUS_NAMESPACE" --all --ignore-not-found --wait=true --timeout=180s || true
+
+  # 重新创建命名空间
   kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
   return 0
 }
@@ -397,7 +394,7 @@ choose_llm_mode() {
     return
   fi
 
-  log_step "步骤 2/10：选择 LLM 模式"
+  log_step "步骤 4/9：选择 LLM 模式"
 
   if [[ "$LLM_MODE_EXPLICIT" == true ]]; then
     if [[ -z "$LLM_PROVIDER" ]]; then
@@ -518,7 +515,65 @@ choose_llm_mode() {
 
   validate_llm_mode
 
+  # 立即保存 LLM 配置，后续步骤即使失败重跑也能跳过此步
+  save_llm_config
+
   echo ""
+}
+
+# ---- 保存 LLM 配置到 K8s ConfigMap 和 Secret（在用户选择完后立即写入） ----
+save_llm_config() {
+  # 检测是否已有保存（符合预期则不会触发此函数，但防御性检查）
+  if kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" &>/dev/null 2>&1 && \
+     kubectl get secret rag-backend-secret -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
+    return
+  fi
+
+  # 确保命名空间存在
+  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/namespace.yaml" &>/dev/null || true
+
+  log_info "保存 LLM 配置到 ConfigMap 和 Secret..."
+
+  local ollama_url=""
+  local ollama_model=""
+  local ollama_embedding_model=""
+
+  if [[ "$WITH_OLLAMA" == true ]]; then
+    ollama_url="$OLLAMA_SERVICE_URL"
+    ollama_model="$OLLAMA_MODEL_DEFAULT"
+    ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
+  elif [[ -n "$OLLAMA_URL_OVERRIDE" ]]; then
+    ollama_url="$OLLAMA_URL_OVERRIDE"
+    ollama_model="$OLLAMA_MODEL_DEFAULT"
+    ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
+  elif [[ "$LLM_PROVIDER" == "ollama" ]]; then
+    log_warn "未部署 Ollama；请使用 --ollama-url 指定外部 Ollama，或选择集群内 Ollama 模式。"
+  else
+    log_info "配置后端使用云端 API: ${LLM_PROVIDER} (${LLM_MODEL} @ ${LLM_API_BASE})"
+  fi
+
+  kubectl create configmap rag-backend-config \
+    -n "$APP_NAMESPACE" \
+    --from-literal=LLM_PROVIDER="$LLM_PROVIDER" \
+    --from-literal=OLLAMA_URL="$ollama_url" \
+    --from-literal=OLLAMA_MODEL="$ollama_model" \
+    --from-literal=OLLAMA_EMBEDDING_MODEL="$ollama_embedding_model" \
+    --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
+    --from-literal=LLM_API_BASE="$LLM_API_BASE" \
+    --from-literal=LLM_MODEL="$LLM_MODEL" \
+    --from-literal=EMBEDDING_API_BASE="$EMBEDDING_API_BASE" \
+    --from-literal=EMBEDDING_MODEL="$EMBEDDING_MODEL" \
+    --from-literal=RETRIEVAL_TOP_K="5" \
+    --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  kubectl create secret generic rag-backend-secret \
+    -n "$APP_NAMESPACE" \
+    --from-literal=LLM_API_KEY="$LLM_API_KEY" \
+    --from-literal=EMBEDDING_API_KEY="$EMBEDDING_API_KEY" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  log_info "✓ LLM 配置已保存"
 }
 
 # ---- 配置 Docker Hub 镜像加速器（k3s） ----
@@ -548,7 +603,7 @@ EOF
 
 # ---- 步骤 1：前置条件检查 ----
 check_prerequisites() {
-  log_step "步骤 1/10：检查前置条件"
+  log_step "步骤 1/9：检查前置条件"
 
   # 检查 kubectl
   if ! command -v kubectl &>/dev/null; then
@@ -599,7 +654,7 @@ check_prerequisites() {
 
 # ---- 步骤 3：准备存储 ----
 prepare_storage() {
-  log_step "步骤 3/10：检查存储配置"
+  log_step "步骤 2/9：检查存储配置"
 
   # 检查是否有默认 StorageClass
   DEFAULT_SC=$(kubectl get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null || echo "")
@@ -625,7 +680,7 @@ prepare_storage() {
 
 # ---- 步骤 4：创建命名空间 ----
 create_namespaces() {
-  log_step "步骤 4/10：创建命名空间"
+  log_step "步骤 3/9：创建命名空间"
 
   kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/namespace.yaml"
@@ -636,7 +691,7 @@ create_namespaces() {
 
 # ---- 步骤 5：部署 Milvus ----
 deploy_milvus() {
-  log_step "步骤 5/10：部署 Milvus 向量数据库（通过 Helm）"
+  log_step "步骤 5/9：部署 Milvus 向量数据库（通过 Helm）"
   local release_exists=false
   local release_status=""
 
@@ -655,11 +710,15 @@ deploy_milvus() {
   fi
 
   if [[ "$release_exists" == true && "$release_status" =~ ^(failed|pending-) ]]; then
-    if reset_failed_milvus_on_minikube; then
+    log_warn "Milvus release 状态为 ${release_status}，自动清理后重新安装..."
+    if reset_failed_milvus_release; then
       release_exists=false
     else
-      log_error "Milvus release 状态为 ${release_status}。请先手动检查或清理后再运行部署脚本。"
-      exit 1
+      log_warn "自动清理失败，再次尝试强制清理..."
+      kubectl delete namespace "$MILVUS_NAMESPACE" --force --grace-period=0 --ignore-not-found 2>/dev/null || true
+      sleep 5
+      kubectl apply -f "${SCRIPT_DIR}/apps/milvus/namespace.yaml"
+      release_exists=false
     fi
   fi
 
@@ -684,16 +743,9 @@ deploy_milvus() {
   echo ""
 }
 
-# ---- 步骤 6：创建应用配置 ----
-create_app_config() {
-  # 如果 choose_llm_mode 已跳过（配置已存在），此处也跳过
-  if kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
-    log_info "ConfigMap 已存在，跳过创建。如需更新请先删除旧配置再重试。"
-    echo ""
-    return
-  fi
-
-  log_step "步骤 6/10：创建应用 ConfigMap 和 Secret"
+# ---- 步骤 6：创建知识库 ConfigMap ----
+create_knowledge_base_config() {
+  log_step "步骤 6/9：创建知识库 ConfigMap"
 
   if compgen -G "${SCRIPT_DIR}/knowledge-base/*.md" > /dev/null; then
     kubectl create configmap rag-knowledge-base \
@@ -705,48 +757,6 @@ create_app_config() {
     log_warn "未找到 knowledge-base/*.md，跳过知识库 ConfigMap"
   fi
 
-  local ollama_url=""
-  local ollama_model=""
-  local ollama_embedding_model=""
-
-  if [[ "$WITH_OLLAMA" == true ]]; then
-    log_info "配置后端使用集群内 Ollama: $OLLAMA_SERVICE_URL"
-    ollama_url="$OLLAMA_SERVICE_URL"
-    ollama_model="$OLLAMA_MODEL_DEFAULT"
-    ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
-  elif [[ -n "$OLLAMA_URL_OVERRIDE" ]]; then
-    log_info "配置后端使用外部 Ollama: $OLLAMA_URL_OVERRIDE"
-    ollama_url="$OLLAMA_URL_OVERRIDE"
-    ollama_model="$OLLAMA_MODEL_DEFAULT"
-    ollama_embedding_model="$OLLAMA_EMBEDDING_MODEL_DEFAULT"
-  elif [[ "$LLM_PROVIDER" == "ollama" ]]; then
-    log_warn "未部署 Ollama；请使用 --ollama-url 指定外部 Ollama，或选择集群内 Ollama 模式。"
-  else
-    log_info "配置后端使用云端 API: ${LLM_PROVIDER} (${LLM_MODEL} @ ${LLM_API_BASE})"
-  fi
-
-  kubectl create configmap rag-backend-config \
-    -n "$APP_NAMESPACE" \
-    --from-literal=LLM_PROVIDER="$LLM_PROVIDER" \
-    --from-literal=OLLAMA_URL="$ollama_url" \
-    --from-literal=OLLAMA_MODEL="$ollama_model" \
-    --from-literal=OLLAMA_EMBEDDING_MODEL="$ollama_embedding_model" \
-    --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
-    --from-literal=LLM_API_BASE="$LLM_API_BASE" \
-    --from-literal=LLM_MODEL="$LLM_MODEL" \
-    --from-literal=EMBEDDING_API_BASE="$EMBEDDING_API_BASE" \
-    --from-literal=EMBEDDING_MODEL="$EMBEDDING_MODEL" \
-    --from-literal=RETRIEVAL_TOP_K="5" \
-    --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
-    --dry-run=client -o yaml | kubectl apply -f -
-
-  kubectl create secret generic rag-backend-secret \
-    -n "$APP_NAMESPACE" \
-    --from-literal=LLM_API_KEY="$LLM_API_KEY" \
-    --from-literal=EMBEDDING_API_KEY="$EMBEDDING_API_KEY" \
-    --dry-run=client -o yaml | kubectl apply -f -
-
-  log_info "✓ ConfigMap 和 Secret 已创建"
   echo ""
 }
 
@@ -763,7 +773,7 @@ deploy_ollama() {
     return
   fi
 
-  log_step "步骤 7/10：部署 Ollama（可选）"
+  log_step "步骤 7/9：部署 Ollama（可选）"
 
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/ollama.yaml"
   log_info "等待 Ollama Pod 就绪..."
@@ -805,7 +815,7 @@ check_ollama_ready_for_import() {
 
 # ---- 步骤 8：部署 RAG 应用 ----
 deploy_rag_app() {
-  log_step "步骤 8/10：部署 RAG 后端和前端"
+  log_step "步骤 8/9：部署 RAG 后端和前端"
 
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/backend.yaml"
   kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/frontend.yaml"
@@ -823,7 +833,7 @@ run_knowledge_import() {
     return
   fi
 
-  log_step "步骤 10/10：导入知识库"
+  log_step "导入知识库"
 
   if ! check_ollama_ready_for_import; then
     echo ""
@@ -844,7 +854,7 @@ run_knowledge_import() {
 
 # ---- 步骤 9：等待就绪 ----
 wait_for_ready() {
-  log_step "步骤 9/10：等待所有 Pod 就绪"
+  log_step "步骤 9/9：等待所有 Pod 就绪"
 
   log_info "等待 Milvus Pod 就绪（可能需要几分钟）..."
   kubectl wait --for=condition=ready pod \
@@ -951,11 +961,11 @@ main() {
 
   check_prerequisites
   setup_registry_mirror
-  choose_llm_mode
   prepare_storage
   create_namespaces
+  choose_llm_mode
   deploy_milvus
-  create_app_config
+  create_knowledge_base_config
   deploy_ollama
   deploy_rag_app
   wait_for_ready
