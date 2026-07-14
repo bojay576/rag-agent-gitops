@@ -52,6 +52,7 @@ EMBEDDING_API_KEY=""
 LLM_MODE_EXPLICIT=false
 SKIP_OLLAMA_REQUESTED=false
 REGISTRY_MIRROR=""
+CONFIG_FILE="${SCRIPT_DIR}/.rag-deploy-config"
 MILVUS_HELM_VALUES=(
   --set cluster.enabled=false
   --set streaming.enabled=false
@@ -393,11 +394,20 @@ choose_llm_mode() {
   if kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" &>/dev/null 2>&1 && \
      kubectl get secret rag-backend-secret -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
     log_info "检测到已有部署配置（ConfigMap + Secret），跳过 LLM 模式选择。"
-    log_info "如需重新配置，请先执行:"
-    log_info "  kubectl delete configmap rag-backend-config -n ${APP_NAMESPACE}"
-    log_info "  kubectl delete secret rag-backend-secret -n ${APP_NAMESPACE}"
     echo ""
     return
+  fi
+
+  # 本地配置文件存在且未传新参数 → 恢复配置到 K8s，跳过交互
+  if [[ "$LLM_MODE_EXPLICIT" != true && -f "$CONFIG_FILE" ]]; then
+    log_info "检测到本地配置缓存（${CONFIG_FILE}），自动恢复..."
+    if restore_local_config; then
+      log_info "✓ 配置已恢复。如需重新配置请执行: rm -f ${CONFIG_FILE}"
+      echo ""
+      return
+    else
+      log_warn "本地配置恢复失败，将重新配置。"
+    fi
   fi
 
   log_step "步骤 4/9：选择 LLM 模式"
@@ -579,7 +589,102 @@ save_llm_config() {
     --from-literal=EMBEDDING_API_KEY="$EMBEDDING_API_KEY" \
     --dry-run=client -o yaml | kubectl apply -f -
 
+  # 同时保存到本地文件（即使命名空间被删除也能恢复）
+  cat > "$CONFIG_FILE" <<EOF
+# RAG Agent GitOps — LLM 部署配置缓存（自动生成，请勿手动修改）
+# 如需重新配置请执行：rm -f ${CONFIG_FILE}
+LLM_PROVIDER=${LLM_PROVIDER}
+WITH_OLLAMA=${WITH_OLLAMA}
+OLLAMA_URL=${ollama_url}
+OLLAMA_MODEL=${ollama_model}
+OLLAMA_EMBEDDING_MODEL=${ollama_embedding_model}
+LLM_API_BASE=${LLM_API_BASE}
+LLM_MODEL=${LLM_MODEL}
+EMBEDDING_API_BASE=${EMBEDDING_API_BASE}
+EMBEDDING_MODEL=${EMBEDDING_MODEL}
+EOF
+  # Secret 内容单独存，权限 600
+  cat > "${CONFIG_FILE}.secret" <<EOF
+LLM_API_KEY=${LLM_API_KEY}
+EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+EOF
+  chmod 600 "${CONFIG_FILE}.secret"
+
   log_info "✓ LLM 配置已保存"
+}
+
+# ---- 从本地配置文件恢复 LLM 配置到 K8s ----
+restore_local_config() {
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    return 1
+  fi
+
+  # 确保命名空间存在
+  kubectl apply -f "${SCRIPT_DIR}/apps/rag-app/namespace.yaml" &>/dev/null || true
+
+  # source 配置文件自动加载变量
+  local ollama_url="" ollama_model="" ollama_embedding_model=""
+  local llm_provider="" with_ollama=""
+  local llm_api_base="" llm_model="" embedding_api_base="" embedding_model=""
+  local llm_api_key="" embedding_api_key=""
+
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    [[ -z "$key" || "$key" =~ ^# ]] && continue
+    case "$key" in
+      LLM_PROVIDER)    llm_provider="$value" ;;
+      WITH_OLLAMA)     with_ollama="$value" ;;
+      OLLAMA_URL)      ollama_url="$value" ;;
+      OLLAMA_MODEL)    ollama_model="$value" ;;
+      OLLAMA_EMBEDDING_MODEL) ollama_embedding_model="$value" ;;
+      LLM_API_BASE)    llm_api_base="$value" ;;
+      LLM_MODEL)       llm_model="$value" ;;
+      EMBEDDING_API_BASE) embedding_api_base="$value" ;;
+      EMBEDDING_MODEL) embedding_model="$value" ;;
+    esac
+  done < "$CONFIG_FILE"
+
+  # 读取 Secret 文件
+  if [[ -f "${CONFIG_FILE}.secret" ]]; then
+    while IFS='=' read -r key value || [[ -n "$key" ]]; do
+      [[ -z "$key" || "$key" =~ ^# ]] && continue
+      case "$key" in
+        LLM_API_KEY)       llm_api_key="$value" ;;
+        EMBEDDING_API_KEY) embedding_api_key="$value" ;;
+      esac
+    done < "${CONFIG_FILE}.secret"
+  fi
+
+  kubectl create configmap rag-backend-config \
+    -n "$APP_NAMESPACE" \
+    --from-literal=LLM_PROVIDER="$llm_provider" \
+    --from-literal=OLLAMA_URL="$ollama_url" \
+    --from-literal=OLLAMA_MODEL="$ollama_model" \
+    --from-literal=OLLAMA_EMBEDDING_MODEL="$ollama_embedding_model" \
+    --from-literal=MILVUS_ADDRESS="milvus.${MILVUS_NAMESPACE}.svc.cluster.local:19530" \
+    --from-literal=LLM_API_BASE="$llm_api_base" \
+    --from-literal=LLM_MODEL="$llm_model" \
+    --from-literal=EMBEDDING_API_BASE="$embedding_api_base" \
+    --from-literal=EMBEDDING_MODEL="$embedding_model" \
+    --from-literal=RETRIEVAL_TOP_K="5" \
+    --from-literal=RETRIEVAL_SCORE_THRESHOLD="0.5" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  kubectl create secret generic rag-backend-secret \
+    -n "$APP_NAMESPACE" \
+    --from-literal=LLM_API_KEY="$llm_api_key" \
+    --from-literal=EMBEDDING_API_KEY="$embedding_api_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  # 把配置恢复到全局变量，后续步骤如 deploy_ollama 等需要
+  LLM_PROVIDER="$llm_provider"
+  WITH_OLLAMA="${with_ollama:-true}"
+  OLLAMA_URL_OVERRIDE="$ollama_url"
+  LLM_API_BASE="$llm_api_base"
+  LLM_MODEL="$llm_model"
+  LLM_API_KEY="$llm_api_key"
+  EMBEDDING_API_BASE="$embedding_api_base"
+  EMBEDDING_MODEL="$embedding_model"
+  EMBEDDING_API_KEY="$embedding_api_key"
 }
 
 # ---- 配置 Docker Hub 镜像加速器（k3s） ----

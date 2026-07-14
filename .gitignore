@@ -44,3 +44,7 @@ kubeconfig*
 # Temp
 tmp/
 *.log
+
+# Deploy config cache (contains API keys)
+.rag-deploy-config
+.rag-deploy-config.secret
