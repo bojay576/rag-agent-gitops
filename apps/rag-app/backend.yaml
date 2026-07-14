@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: swr.cn-north-4.myhuaweicloud.com/ghcr.io/bojay576/rag-backend:latest
+        image: ghcr.io/bojay576/rag-backend:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
