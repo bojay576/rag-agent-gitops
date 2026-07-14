@@ -4,7 +4,6 @@ from config import Settings
 from rag.embedding import EmbeddingClient
 from rag.retriever import DocumentChunk, Retriever
 
-
 SUPPORTED_SUFFIXES = {".md", ".txt", ".json"}
 
 
@@ -91,6 +90,7 @@ class KnowledgeImporter:
     def _chunk_json(self, text: str, source: str) -> list[DocumentChunk]:
         """Split .json file by top-level keys"""
         import json
+
         chunks: list[DocumentChunk] = []
         try:
             data = json.loads(text)
