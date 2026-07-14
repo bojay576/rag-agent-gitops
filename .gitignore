@@ -48,3 +48,6 @@ tmp/
 # Deploy config cache (contains API keys)
 .rag-deploy-config
 .rag-deploy-config.secret
+
+# Helm chart cache
+.milvus-chart/

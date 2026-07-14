@@ -805,6 +805,7 @@ deploy_milvus() {
   log_step "步骤 5/9：部署 Milvus 向量数据库（通过 Helm）"
   local release_exists=false
   local release_status=""
+  local chart_cache="${SCRIPT_DIR}/.milvus-chart"
 
   # 添加 Helm 仓库
   if ! helm repo list 2>/dev/null | grep -q "milvus"; then
@@ -833,9 +834,82 @@ deploy_milvus() {
     fi
   fi
 
+  # 下载或查找本地 chart
+  local chart_ref="milvus/milvus"
+  local chart_version
+  chart_version=$(helm show chart milvus/milvus 2>/dev/null | grep '^version:' | awk '{print $2}' | head -1 || echo "")
+  if [[ -z "$chart_version" ]]; then
+    chart_version="5.0.24"
+  fi
+
+  # 检查本地是否已有缓存的 chart
+  if [[ -d "${chart_cache}/milvus" ]]; then
+    log_info "使用本地理化 chart（${chart_cache}/milvus）..."
+    chart_ref="${chart_cache}/milvus"
+  else
+    log_info "尝试下载 Milvus chart 到本地..."
+    local pull_ok=false
+    for attempt in 1 2 3; do
+      if helm pull milvus/milvus --untar --destination "$chart_cache" 2>/dev/null; then
+        pull_ok=true
+        chart_ref="${chart_cache}/milvus"
+        log_info "✓ Chart 下载成功，从本地安装..."
+        break
+      fi
+      log_warn "Helm pull 失败（第 ${attempt}/3 次）..."
+      sleep 2
+    done
+
+    # 如果 helm pull 失败（国内 GitHub Release 下载慢/被墙），尝试通过 GH 代理下载
+    if [[ "$pull_ok" != true ]]; then
+      log_warn "Helm pull 失败，尝试通过 GitHub mirror 代理下载 chart..."
+      local tgz_url="https://github.com/zilliztech/milvus-helm/releases/download/milvus-${chart_version}/milvus-${chart_version}.tgz"
+      local tgz_file="${chart_cache}/milvus-${chart_version}.tgz"
+      mkdir -p "$chart_cache"
+
+      # 尝试多个 GitHub mirror 代理
+      for mirror in \
+        "https://ghproxy.com/${tgz_url}" \
+        "https://github.moeyy.xyz/${tgz_url}" \
+        "https://gh.api.99988866.xyz/${tgz_url}" \
+        "${tgz_url}"; do
+        log_info "  尝试: ${mirror}"
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$mirror" -o "$tgz_file" 2>/dev/null; then
+          log_info "  ✓ 下载成功，解压 chart..."
+          rm -rf "${chart_cache}/milvus" 2>/dev/null || true
+          mkdir -p "${chart_cache}/milvus"
+          tar -xzf "$tgz_file" -C "${chart_cache}/milvus" --strip-components=1 2>/dev/null && {
+            pull_ok=true
+            chart_ref="${chart_cache}/milvus"
+            break
+          }
+        fi
+      done
+    fi
+
+    if [[ "$pull_ok" != true ]]; then
+      log_warn "无法下载 Milvus chart，尝试从 Helm 本地缓存中查找..."
+      local helm_cache_dir
+      helm_cache_dir=$(helm env HELM_CACHE 2>/dev/null || echo ~/.cache/helm/repository)
+      local cached_chart
+      cached_chart=$(find "$helm_cache_dir" -name "milvus-*.tgz" 2>/dev/null | head -1 || true)
+      if [[ -n "$cached_chart" ]]; then
+        log_info "找到本地缓存 chart: ${cached_chart}"
+        chart_ref="$cached_chart"
+        pull_ok=true
+      fi
+    fi
+
+    if [[ "$pull_ok" != true ]]; then
+      log_error "无法获取 Milvus Helm chart，请手动下载并放置到 ${chart_cache}/ 目录"
+      log_error "下载地址: https://github.com/zilliztech/milvus-helm/releases/tag/milvus-${chart_version}"
+      exit 1
+    fi
+  fi
+
   if [[ "$release_exists" == true ]]; then
     log_warn "Milvus 已安装，执行更新..."
-    helm upgrade "$MILVUS_HELM_RELEASE" milvus/milvus \
+    helm upgrade "$MILVUS_HELM_RELEASE" "$chart_ref" \
       --namespace "$MILVUS_NAMESPACE" \
       --reset-values \
       "${MILVUS_HELM_VALUES[@]}" \
@@ -843,8 +917,9 @@ deploy_milvus() {
       --timeout 10m
   else
     log_info "安装 Milvus Standalone..."
-    helm install "$MILVUS_HELM_RELEASE" milvus/milvus \
+    helm install "$MILVUS_HELM_RELEASE" "$chart_ref" \
       --namespace "$MILVUS_NAMESPACE" \
+      --create-namespace \
       "${MILVUS_HELM_VALUES[@]}" \
       --wait \
       --timeout 10m
