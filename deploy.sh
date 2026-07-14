@@ -394,6 +394,12 @@ choose_llm_mode() {
   if kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" &>/dev/null 2>&1 && \
      kubectl get secret rag-backend-secret -n "$APP_NAMESPACE" &>/dev/null 2>&1; then
     log_info "检测到已有部署配置（ConfigMap + Secret），跳过 LLM 模式选择。"
+    # 从 ConfigMap 读取 LLM_PROVIDER，判断是否要跳 Ollama
+    local cm_provider
+    cm_provider=$(kubectl get configmap rag-backend-config -n "$APP_NAMESPACE" -o jsonpath='{.data.LLM_PROVIDER}' 2>/dev/null || echo "")
+    if [[ "$cm_provider" != "ollama" ]]; then
+      WITH_OLLAMA=false
+    fi
     echo ""
     return
   fi
