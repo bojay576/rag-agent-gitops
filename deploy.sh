@@ -51,6 +51,7 @@ EMBEDDING_MODEL=""
 EMBEDDING_API_KEY=""
 LLM_MODE_EXPLICIT=false
 SKIP_OLLAMA_REQUESTED=false
+REGISTRY_MIRROR=""
 MILVUS_HELM_VALUES=(
   --set cluster.enabled=false
   --set streaming.enabled=false
@@ -61,6 +62,7 @@ MILVUS_HELM_VALUES=(
   --set standalone.messageQueue=rocksmq
   --set minio.mode=standalone
   --set minio.replicas=1
+  --set minio.image.tag=RELEASE.2025-07-23T15-54-02Z
   --set minio.persistence.size=20Gi
   --set minio.securityContext.runAsUser=0
   --set minio.securityContext.runAsGroup=0
@@ -84,6 +86,7 @@ usage() {
   --embedding-api-base URL  Embedding API Base
   --embedding-model MODEL   Embedding 模型名称
   --embedding-api-key KEY   Embedding API Key（默认复用 LLM API Key）
+  --registry-mirror URL     Docker Hub 镜像加速器地址，例如 https://dockerhub.azk8s.cn
   -h, --help                显示帮助
 
 示例:
@@ -92,6 +95,7 @@ usage() {
   ./deploy.sh --ollama-url http://192.168.1.100:11434
   ./deploy.sh --llm-provider openai
   ./deploy.sh --llm-provider openai --llm-api-base https://api.openai.com/v1 --llm-model gpt-4o
+  ./deploy.sh --registry-mirror https://dockerhub.azk8s.cn
 EOF
 }
 
@@ -171,6 +175,11 @@ parse_args() {
         require_arg "$1" "${2:-}"
         EMBEDDING_API_KEY="${2:-}"
         LLM_MODE_EXPLICIT=true
+        shift 2
+        ;;
+      --registry-mirror)
+        require_arg "$1" "${2:-}"
+        REGISTRY_MIRROR="${2:-}"
         shift 2
         ;;
       -h|--help)
@@ -509,6 +518,31 @@ choose_llm_mode() {
 
   validate_llm_mode
 
+  echo ""
+}
+
+# ---- 配置 Docker Hub 镜像加速器（k3s） ----
+setup_registry_mirror() {
+  if [[ -z "$REGISTRY_MIRROR" ]]; then
+    return
+  fi
+
+  # k3s 使用 containerd，镜像加速器配置在 /etc/rancher/k3s/registries.yaml
+  if [[ ! -f /etc/rancher/k3s/registries.yaml ]] || ! grep -q "$REGISTRY_MIRROR" /etc/rancher/k3s/registries.yaml 2>/dev/null; then
+    log_info "配置 k3s containerd 镜像加速器: ${REGISTRY_MIRROR}"
+    cat > /etc/rancher/k3s/registries.yaml <<EOF
+mirrors:
+  docker.io:
+    endpoint:
+      - "${REGISTRY_MIRROR}"
+EOF
+    log_info "重启 k3s 使镜像加速器生效..."
+    systemctl restart k3s 2>/dev/null || service k3s restart 2>/dev/null || true
+    sleep 3
+    log_info "✓ 镜像加速器已配置"
+  else
+    log_info "✓ 镜像加速器已配置: ${REGISTRY_MIRROR}"
+  fi
   echo ""
 }
 
@@ -916,6 +950,7 @@ main() {
   echo ""
 
   check_prerequisites
+  setup_registry_mirror
   choose_llm_mode
   prepare_storage
   create_namespaces
