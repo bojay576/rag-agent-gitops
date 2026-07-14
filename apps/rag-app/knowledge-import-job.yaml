@@ -17,7 +17,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: import
-        image: curlimages/curl:8.11.1
+        image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/curlimages/curl:8.20.0
         imagePullPolicy: IfNotPresent
         command:
         - /bin/sh
